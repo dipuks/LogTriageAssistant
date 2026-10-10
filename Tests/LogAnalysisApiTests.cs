@@ -2,7 +2,11 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using LogTriageAssistant.Services;
 using Xunit;
 
 namespace LogTriageAssistant.Tests;
@@ -95,6 +99,31 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     }
 
     [Fact]
+    public async Task Analyze_RedactsSensitiveValuesBeforeReturningAndPersistingFindings()
+    {
+        const string password = "password=hunter2";
+        const string token = "Bearer abc.def.ghi";
+        const string email = "person@example.com";
+        var response = await _client.PostAsJsonAsync("/api/analyze", new
+        {
+            logText = $"ERROR database failed {password} {token} contact {email}"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var resultJson = await response.Content.ReadAsStringAsync();
+        Assert.Contains("[REDACTED]", resultJson);
+        Assert.Contains("[REDACTED_EMAIL]", resultJson);
+        Assert.DoesNotContain("hunter2", resultJson);
+        Assert.DoesNotContain("abc.def.ghi", resultJson);
+        Assert.DoesNotContain(email, resultJson);
+
+        var recentJson = await _client.GetStringAsync("/api/recent?limit=100");
+        Assert.DoesNotContain("hunter2", recentJson);
+        Assert.DoesNotContain("abc.def.ghi", recentJson);
+        Assert.DoesNotContain(email, recentJson);
+    }
+
+    [Fact]
     public async Task AnalyzeFile_AcceptsMultipartUpload()
     {
         using var form = new MultipartFormDataContent();
@@ -160,6 +189,32 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Analyze_EnforcesConfiguredSavedHistoryLimit()
+    {
+        using var factory = new LogAnalysisApiFactory { MaxSavedAnalyses = 2 };
+        using var client = factory.CreateClient();
+        var ids = new List<string>();
+
+        for (var index = 0; index < 3; index++)
+        {
+            var response = await client.PostAsJsonAsync("/api/analyze", new
+            {
+                logText = $"ERROR database failure {index}"
+            });
+            var analysis = await response.Content.ReadFromJsonAsync<AnalysisResponse>();
+            Assert.NotNull(analysis);
+            ids.Add(analysis.Id);
+        }
+
+        var recent = await client.GetFromJsonAsync<List<AnalysisResponse>>("/api/recent?limit=100");
+
+        Assert.NotNull(recent);
+        Assert.True(File.Exists(factory.DatabasePath), $"Expected test database at {factory.DatabasePath}.");
+        Assert.Equal(2, recent.Count);
+        Assert.DoesNotContain(recent, item => item.Id == ids[0]);
+    }
+
     private sealed class AnalysisResponse
     {
         public string Id { get; set; } = string.Empty;
@@ -179,15 +234,20 @@ public sealed class LogAnalysisApiFactory : WebApplicationFactory<Program>
     private readonly string _databasePath = Path.Combine(
         Path.GetTempPath(),
         $"logtriage-tests-{Guid.NewGuid():N}.db");
+    public int MaxSavedAnalyses { get; set; } = 1000;
+    public string DatabasePath => _databasePath;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.ConfigureAppConfiguration((_, configuration) =>
+        builder.ConfigureTestServices(services =>
         {
-            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            services.RemoveAll<LogAnalysisStore>();
+            var connectionString = new SqliteConnectionStringBuilder
             {
-                ["Storage:DatabasePath"] = _databasePath
-            });
+                DataSource = _databasePath,
+                Mode = SqliteOpenMode.ReadWriteCreate
+            }.ToString();
+            services.AddSingleton(new LogAnalysisStore(connectionString, MaxSavedAnalyses));
         });
     }
 
@@ -199,6 +259,7 @@ public sealed class LogAnalysisApiFactory : WebApplicationFactory<Program>
             return;
         }
 
+        SqliteConnection.ClearAllPools();
         foreach (var path in new[] { _databasePath, $"{_databasePath}-shm", $"{_databasePath}-wal" })
         {
             if (File.Exists(path))

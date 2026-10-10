@@ -11,8 +11,9 @@ A .NET 10 ASP.NET Core app for triaging runtime logs, application failures, depe
 - Weigh multiple matching log signatures and flag performance, cache, and serialization issues
 - Parse common JSON/JSONL log fields and attach .NET/Java/Python-style stack-trace continuation lines to one finding
 - Include source timestamps and line ranges in findings when available
+- Redact common credential assignments, bearer tokens, and email addresses in finding excerpts before results are returned or persisted
 - Cap displayed findings at 500 per analysis while calculating overall severity across the full log
-- Produce a summary with confidence score and severity
+- Produce a summary with a heuristic signal score and severity (the score is not a calibrated probability)
 - Suggest actions to investigate next
 - Save recent analyses to a local SQLite database
 - Reopen full saved results from the recent analyses list
@@ -58,6 +59,7 @@ dotnet test
 ```
 
 To store the database elsewhere, set the `Storage__DatabasePath` environment variable before starting the app.
+Saved history is limited to 1,000 analyses by default; set `Storage__MaxSavedAnalyses` to change that limit.
 
 ## Run with Docker
 
@@ -103,4 +105,5 @@ The upload field must be named `file`.
 - Analysis uses local, explainable keyword rules; it does not send logs to an AI service.
 - SQLite is intended for local/single-instance use. Multi-instance deployments need shared durable storage.
 - The app does not include authentication. Keep it on a trusted machine/network and do not expose it directly to the public internet.
-- Full uploaded log files are not stored. Saved analysis results include matched log-line excerpts, clipped to 220 characters, so avoid submitting secrets or sensitive production data.
+- Full uploaded log files are not stored. Saved results contain matched excerpts up to 220 characters after basic secret/email redaction; redaction uses patterns and cannot guarantee removal of every sensitive value.
+- Saved analysis history is capped at 1,000 items by default. Configure `Storage__MaxSavedAnalyses` to change the cap; deletion and retention remove records from SQLite but do not securely overwrite database storage.

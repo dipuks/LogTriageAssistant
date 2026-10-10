@@ -4,13 +4,26 @@ using Microsoft.Data.Sqlite;
 
 namespace LogTriageAssistant.Services;
 
-public class LogAnalysisStore(string connectionString)
+public class LogAnalysisStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly string _connectionString;
+    private readonly int _maxSavedAnalyses;
+
+    public LogAnalysisStore(string connectionString, int maxSavedAnalyses = 1000)
+    {
+        if (maxSavedAnalyses < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxSavedAnalyses), "At least one saved analysis must be retained.");
+        }
+
+        _connectionString = connectionString;
+        _maxSavedAnalyses = maxSavedAnalyses;
+    }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        await using var connection = new SqliteConnection(connectionString);
+        await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
         var command = connection.CreateCommand();
@@ -23,16 +36,26 @@ public class LogAnalysisStore(string connectionString)
                 ResultJson TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS IX_Analyses_AnalyzedAt ON Analyses (AnalyzedAt DESC);
+            DELETE FROM Analyses
+            WHERE Id NOT IN (
+                SELECT Id
+                FROM Analyses
+                ORDER BY AnalyzedAt DESC, rowid DESC
+                LIMIT $maxRows
+            );
             """;
+        command.Parameters.AddWithValue("$maxRows", _maxSavedAnalyses);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task AddAsync(LogAnalysisResult item, CancellationToken cancellationToken = default)
     {
-        await using var connection = new SqliteConnection(connectionString);
+        await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
         command.CommandText = """
             INSERT INTO Analyses (Id, AnalyzedAt, Severity, FileName, ResultJson)
             VALUES ($id, $analyzedAt, $severity, $fileName, $resultJson);
@@ -43,6 +66,21 @@ public class LogAnalysisStore(string connectionString)
         command.Parameters.AddWithValue("$fileName", item.FileName ?? string.Empty);
         command.Parameters.AddWithValue("$resultJson", JsonSerializer.Serialize(item, JsonOptions));
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        var retentionCommand = connection.CreateCommand();
+        retentionCommand.Transaction = (SqliteTransaction)transaction;
+        retentionCommand.CommandText = """
+            DELETE FROM Analyses
+            WHERE Id NOT IN (
+                SELECT Id
+                FROM Analyses
+                ORDER BY AnalyzedAt DESC, rowid DESC
+                LIMIT $maxRows
+            );
+            """;
+        retentionCommand.Parameters.AddWithValue("$maxRows", _maxSavedAnalyses);
+        await retentionCommand.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<LogAnalysisResult>> GetRecentAsync(
@@ -52,14 +90,14 @@ public class LogAnalysisStore(string connectionString)
         var boundedLimit = Math.Clamp(limit, 1, 100);
         var results = new List<LogAnalysisResult>(boundedLimit);
 
-        await using var connection = new SqliteConnection(connectionString);
+        await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
         var command = connection.CreateCommand();
         command.CommandText = """
             SELECT ResultJson
             FROM Analyses
-            ORDER BY AnalyzedAt DESC
+            ORDER BY AnalyzedAt DESC, rowid DESC
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$limit", boundedLimit);
@@ -79,7 +117,7 @@ public class LogAnalysisStore(string connectionString)
 
     public async Task<bool> DeleteAsync(string id, CancellationToken cancellationToken = default)
     {
-        await using var connection = new SqliteConnection(connectionString);
+        await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
         var command = connection.CreateCommand();

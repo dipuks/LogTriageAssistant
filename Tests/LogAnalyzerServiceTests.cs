@@ -95,6 +95,32 @@ public class LogAnalyzerServiceTests
     }
 
     [Fact]
+    public void Analyze_RedactsCredentialsAndEmailFromStoredFindingText()
+    {
+        const string secret = "password=hunter2";
+        const string token = "Bearer abc.def.ghi";
+        const string email = "person@example.com";
+        var result = _service.Analyze($"ERROR database failed {secret} {token} contact {email}");
+
+        var finding = Assert.Single(result.Findings);
+        Assert.Contains("[REDACTED]", finding.Message);
+        Assert.Contains("Bearer [REDACTED]", finding.Message);
+        Assert.Contains("[REDACTED_EMAIL]", finding.Message);
+        Assert.DoesNotContain("hunter2", finding.Message);
+        Assert.DoesNotContain("abc.def.ghi", finding.Message);
+        Assert.DoesNotContain(email, finding.Message);
+        Assert.Equal(finding.Message, finding.Evidence);
+    }
+
+    [Fact]
+    public void Analyze_StoresOnlyFileNameWithoutPath()
+    {
+        var result = _service.Analyze("ERROR database failed", @"C:\logs\production.log");
+
+        Assert.Equal("production.log", result.FileName);
+    }
+
+    [Fact]
     public void Analyze_ReturnsNoFindingsForNullInput()
     {
         var result = _service.Analyze(null);

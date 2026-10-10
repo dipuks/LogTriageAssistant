@@ -7,6 +7,16 @@ namespace LogTriageAssistant.Services;
 public class LogAnalyzerService
 {
     private const int MaximumFindings = 500;
+    private const int MaximumFileNameLength = 128;
+    private static readonly Regex SensitiveAssignmentPattern = new(
+        """(?i)(["']?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex BearerTokenPattern = new(
+        """(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex EmailPattern = new(
+        """(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Dictionary<string, string[]> CategoryPatterns = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -107,7 +117,7 @@ public class LogAnalyzerService
 
         return new LogAnalysisResult
         {
-            FileName = fileName,
+            FileName = NormalizeFileName(fileName),
             Summary = summary,
             Severity = overallSeverity,
             Confidence = confidence,
@@ -151,8 +161,13 @@ public class LogAnalyzerService
                 continue;
             }
 
-            if (IsStackTraceContinuation(line) && events.Count > 0)
+            if (IsStackTraceContinuation(line))
             {
+                if (events.Count == 0 || !events[^1].IsActionable)
+                {
+                    continue;
+                }
+
                 var previous = events[^1];
                 previous.DisplayText += Environment.NewLine + line.Trim();
                 previous.SearchText += " " + line.Trim();
@@ -167,7 +182,8 @@ public class LogAnalyzerService
                 EndLineNumber = i + 1,
                 DisplayText = parsed.Message,
                 SearchText = parsed.SearchText,
-                Timestamp = parsed.Timestamp
+                Timestamp = parsed.Timestamp,
+                IsActionable = DetectCategory(parsed.SearchText) is not null || EvaluateSeverity(parsed.SearchText) != "INFO"
             });
         }
 
@@ -236,14 +252,34 @@ public class LogAnalyzerService
         public string DisplayText { get; set; } = string.Empty;
         public string SearchText { get; set; } = string.Empty;
         public string? Timestamp { get; set; }
+        public bool IsActionable { get; set; }
     }
 
     private sealed record ParsedStructuredLine(string Message, string SearchText, string? Timestamp);
 
     private static string TrimLine(string line)
     {
-        var cleaned = line.Trim();
+        var cleaned = RedactSensitiveData(line.Trim());
         return cleaned.Length > 220 ? cleaned[..217] + "..." : cleaned;
+    }
+
+    private static string RedactSensitiveData(string text)
+    {
+        var redacted = SensitiveAssignmentPattern.Replace(text, "$1[REDACTED]");
+        redacted = BearerTokenPattern.Replace(redacted, "Bearer [REDACTED]");
+        return EmailPattern.Replace(redacted, "[REDACTED_EMAIL]");
+    }
+
+    private static string? NormalizeFileName(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return fileName;
+        }
+
+        var safeName = fileName.Replace('\\', '/').Split('/').Last().Trim();
+        safeName = new string(safeName.Where(character => !char.IsControl(character)).ToArray());
+        return safeName.Length > MaximumFileNameLength ? safeName[..MaximumFileNameLength] : safeName;
     }
 
     private static string EvaluateSeverity(string line)

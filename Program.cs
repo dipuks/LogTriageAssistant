@@ -28,7 +28,8 @@ var connectionString = new SqliteConnectionStringBuilder
     DataSource = databasePath,
     Mode = SqliteOpenMode.ReadWriteCreate
 }.ToString();
-builder.Services.AddSingleton(new LogAnalysisStore(connectionString));
+var maxSavedAnalyses = builder.Configuration.GetValue("Storage:MaxSavedAnalyses", 1000);
+builder.Services.AddSingleton(new LogAnalysisStore(connectionString, maxSavedAnalyses));
 builder.Services.AddSingleton<LogAnalyzerService>();
 
 var app = builder.Build();

@@ -12,6 +12,9 @@ public class LogAnalyzerService
         ["Network"] = ["socket", "dns", "connection refused", "network", "handshake", "tls", "http 502", "http 503", "timeout"],
         ["Dependency"] = ["service unavailable", "upstream", "api call failed", "external dependency", "503", "502", "remote service"],
         ["Configuration"] = ["missing config", "appsettings", "environment variable", "configuration", "null reference", "setting"],
+        ["Performance"] = ["slow query", "high latency", "response time", "high cpu", "cpu usage", "throttling", "rate limit", "queue backlog", "throughput"],
+        ["Cache"] = ["cache miss", "cache timeout", "redis", "memcached", "cache unavailable", "eviction storm"],
+        ["Data / Serialization"] = ["serialization", "deserialization", "invalid json", "malformed json", "parse error", "schema validation", "unexpected token"],
         ["Memory / Resource"] = ["out of memory", "oom", "resource exhausted", "too many open files", "memory leak", "stack overflow"],
         ["Runtime / Crash"] = ["exception", "fatal", "panic", "crash", "segmentation fault", "stacktrace", "thread abort"],
         ["Build / Deploy"] = ["build failed", "publish failed", "assembly not found", "dll not found", "deployment", "artifact"],
@@ -24,6 +27,9 @@ public class LogAnalyzerService
         ["Network"] = "Inspect the downstream service, DNS, firewall rules, and retry configuration for transient network issues.",
         ["Dependency"] = "Validate upstream service availability, API contracts, and failover behavior for the dependency chain.",
         ["Configuration"] = "Review configuration values, environment variables, and startup settings for missing or stale values.",
+        ["Performance"] = "Compare latency, CPU, query time, and queue depth against normal baselines; identify the slowest dependency or operation.",
+        ["Cache"] = "Check cache availability, hit rate, eviction behavior, and key/TTL changes; confirm the backing store can handle fallback traffic.",
+        ["Data / Serialization"] = "Validate the payload against the expected schema and inspect recent producer, serializer, or contract changes.",
         ["Memory / Resource"] = "Watch process memory, thread counts, and file handle limits; investigate leak or resource exhaustion patterns.",
         ["Runtime / Crash"] = "Capture stack traces, reproduce the failure, and inspect recent code paths tied to the exception.",
         ["Build / Deploy"] = "Confirm deployment artifacts, package versions, and environment-specific release configuration are aligned.",
@@ -95,17 +101,18 @@ public class LogAnalyzerService
 
     private static string? DetectCategory(string line)
     {
-        foreach (var pair in CategoryPatterns)
-        {
-            var category = pair.Key;
-            var patterns = pair.Value;
-            if (patterns.Any(pattern => line.Contains(pattern, StringComparison.OrdinalIgnoreCase)))
+        return CategoryPatterns
+            .Select((pair, order) => new
             {
-                return category;
-            }
-        }
-
-        return null;
+                Category = pair.Key,
+                Order = order,
+                MatchCount = pair.Value.Count(pattern => line.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            })
+            .Where(match => match.MatchCount > 0)
+            .OrderByDescending(match => match.MatchCount)
+            .ThenBy(match => match.Order)
+            .Select(match => match.Category)
+            .FirstOrDefault();
     }
 
     private static string TrimLine(string line)

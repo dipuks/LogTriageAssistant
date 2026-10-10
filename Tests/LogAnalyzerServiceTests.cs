@@ -32,6 +32,26 @@ public class LogAnalyzerServiceTests
     }
 
     [Fact]
+    public void Analyze_PrioritizesCategoryWithTheStrongestEvidence()
+    {
+        var result = _service.Analyze("ERROR HTTP 503 upstream service unavailable");
+
+        var finding = Assert.Single(result.Findings);
+        Assert.Equal("Dependency", finding.Category);
+    }
+
+    [Theory]
+    [InlineData("ERROR Redis cache unavailable", "Cache")]
+    [InlineData("ERROR malformed JSON unexpected token", "Data / Serialization")]
+    [InlineData("WARN high CPU queue backlog", "Performance")]
+    public void Analyze_DetectsAdditionalOperationalCategories(string line, string expectedCategory)
+    {
+        var finding = Assert.Single(_service.Analyze(line).Findings);
+
+        Assert.Equal(expectedCategory, finding.Category);
+    }
+
+    [Fact]
     public void Analyze_IgnoresBlankLinesAndUnmatchedContent()
     {
         var result = _service.Analyze("service started\n\nrequest completed");

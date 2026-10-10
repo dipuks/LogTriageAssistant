@@ -145,12 +145,12 @@ public class LogAnalyzerService
 
     private static string EvaluateSeverity(string line)
     {
-        if (Regex.IsMatch(line, "(?i)(fatal|panic|segmentation fault|out of memory|stack overflow|critical)", RegexOptions.CultureInvariant))
+        if (Regex.IsMatch(line, "(?i)(fatal|panic|segmentation fault|out of memory|stack overflow|critical|\\bcrit\\b)", RegexOptions.CultureInvariant))
         {
             return "CRITICAL";
         }
 
-        if (Regex.IsMatch(line, "(?i)(error|exception|failed|timeout|unauthorized|forbidden|access denied|deadlock)", RegexOptions.CultureInvariant))
+        if (Regex.IsMatch(line, "(?i)(error|\\berr\\b|exception|failed|timeout|unauthorized|forbidden|access denied|deadlock)", RegexOptions.CultureInvariant))
         {
             return "HIGH";
         }

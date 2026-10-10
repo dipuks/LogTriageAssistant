@@ -42,6 +42,7 @@ public class LogAnalyzerServiceTests
 
     [Theory]
     [InlineData("ERROR request failed", "HIGH")]
+    [InlineData("ERR request failed", "HIGH")]
     [InlineData("WARN request is degraded", "MEDIUM")]
     public void Analyze_ReportsGenericSeveritySignalsAsGeneralFindings(string line, string expectedSeverity)
     {
@@ -60,6 +61,14 @@ public class LogAnalyzerServiceTests
         var finding = Assert.Single(_service.Analyze(line).Findings);
 
         Assert.Equal(expectedCategory, finding.Category);
+    }
+
+    [Fact]
+    public void Analyze_RecognizesShortCriticalLogLevel()
+    {
+        var finding = Assert.Single(_service.Analyze("CRIT service unavailable").Findings);
+
+        Assert.Equal("CRITICAL", finding.Severity);
     }
 
     [Fact]

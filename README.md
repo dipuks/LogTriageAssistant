@@ -42,7 +42,7 @@ To store the database elsewhere, set the `Storage__DatabasePath` environment var
 
 ```powershell
 docker build -t logtriage .
-docker run --rm -p 8080:8080 -v logtriage-data:/app/App_Data logtriage
+docker run --rm -p 127.0.0.1:8080:8080 -v logtriage-data:/app/App_Data logtriage
 ```
 
 Open `http://localhost:8080`. The named Docker volume keeps the SQLite database when the container is replaced.
@@ -73,4 +73,5 @@ The upload field must be named `file`. `/api/recent?limit=10` returns the newest
 
 - Analysis uses local, explainable keyword rules; it does not send logs to an AI service.
 - SQLite is intended for local/single-instance use. Multi-instance deployments need shared durable storage.
+- The app does not include authentication. Keep it on a trusted machine/network and do not expose it directly to the public internet.
 - Full uploaded log files are not stored. Saved analysis results include matched log-line excerpts, clipped to 220 characters, so avoid submitting secrets or sensitive production data.

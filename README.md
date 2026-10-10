@@ -30,10 +30,10 @@ dotnet run
 
 Open the local address printed by `dotnet run` in a browser. The SQLite database is created automatically at `App_Data\logtriage.db`.
 
-Run the analyzer unit and API integration tests with:
+Run the analyzer unit and API integration tests from the repository root with:
 
 ```powershell
-dotnet test Tests\LogTriageAssistant.Tests.csproj
+dotnet test
 ```
 
 To store the database elsewhere, set the `Storage__DatabasePath` environment variable before starting the app.

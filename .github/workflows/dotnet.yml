@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: dotnet restore Tests/LogTriageAssistant.Tests.csproj
+      - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
-      - run: dotnet test Tests/LogTriageAssistant.Tests.csproj --configuration Release --no-restore
+      - run: dotnet test --configuration Release --no-restore
       - run: node --check wwwroot/app.js

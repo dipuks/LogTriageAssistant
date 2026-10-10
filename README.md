@@ -20,6 +20,25 @@ A .NET 10 ASP.NET Core app for triaging runtime logs, application failures, depe
 - Accept log text and file uploads up to 2 MB
 - Run in Docker, with a GitHub Actions build check
 
+## Technology and architecture
+
+- **Backend:** .NET 10 and ASP.NET Core Minimal APIs
+- **Analysis:** deterministic, explainable keyword-signature ranking with severity scoring
+- **Persistence:** SQLite stores analysis results, not complete uploaded log files
+- **Frontend:** static HTML, CSS, and JavaScript served by ASP.NET Core
+- **Quality:** xUnit unit and API integration tests run in GitHub Actions
+- **Packaging:** multi-stage Docker image
+
+```mermaid
+flowchart LR
+    Browser[Browser UI] <--> API[ASP.NET Core API]
+    API --> Analyzer[LogAnalyzerService]
+    API --> Store[LogAnalysisStore]
+    Store --> DB[(SQLite)]
+```
+
+The analyzer weighs multiple category signatures on each line, keeps a maximum of 500 findings per result, and calculates overall severity across every matching line. Its rules are local and explainable; they are not an AI diagnosis.
+
 ## Run locally
 
 ```powershell
@@ -67,7 +86,15 @@ Content-Type: application/json
 curl.exe -F "file=@sample.log" http://localhost:8080/api/analyze-file
 ```
 
-The upload field must be named `file`. `/api/recent?limit=10` returns the newest saved analyses; the limit is clamped to 1-100. `/health` reports application health.
+The upload field must be named `file`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Report application health |
+| `POST /api/analyze` | Analyze JSON log text |
+| `POST /api/analyze-file` | Analyze a multipart file upload |
+| `GET /api/recent?limit=10` | Read recent saved analyses; limit is clamped to 1-100 |
+| `DELETE /api/recent/{id}` | Delete one saved analysis |
 
 ## Current limitations
 

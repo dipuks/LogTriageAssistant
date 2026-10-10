@@ -100,7 +100,16 @@ app.MapPost("/api/analyze-file", async (
             detail: "Uploaded files must be no larger than 2 MB.");
     }
 
-    var form = await request.ReadFormAsync(cancellationToken);
+    IFormCollection form;
+    try
+    {
+        form = await request.ReadFormAsync(cancellationToken);
+    }
+    catch (InvalidDataException)
+    {
+        return Results.BadRequest(new { error = "The multipart form data is invalid." });
+    }
+
     var file = form.Files["file"];
     if (file is null || file.Length == 0)
     {

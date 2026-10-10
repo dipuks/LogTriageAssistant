@@ -95,6 +95,17 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     }
 
     [Fact]
+    public async Task AnalyzeFile_RejectsMalformedMultipartData()
+    {
+        using var content = new StringContent("not a multipart body");
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("multipart/form-data");
+
+        var response = await _client.PostAsync("/api/analyze-file", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DeleteRecent_RemovesSavedAnalysis()
     {
         var createResponse = await _client.PostAsJsonAsync("/api/analyze", new

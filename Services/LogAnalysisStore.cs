@@ -76,4 +76,16 @@ public class LogAnalysisStore(string connectionString)
 
         return results;
     }
+
+    public async Task<bool> DeleteAsync(string id, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM Analyses WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", id);
+
+        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+    }
 }

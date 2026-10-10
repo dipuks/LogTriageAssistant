@@ -12,6 +12,7 @@ A .NET 10 ASP.NET Core app for triaging runtime logs, application failures, depe
 - Suggest actions to investigate next
 - Save recent analyses to a local SQLite database
 - Reopen full saved results from the recent analyses list
+- Delete saved analyses from history
 - Search saved analyses by file name, summary, or finding and filter by severity
 - Run analyzer unit and API integration tests with `dotnet test`
 - Accept log text and file uploads up to 2 MB

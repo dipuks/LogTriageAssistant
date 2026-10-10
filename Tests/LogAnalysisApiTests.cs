@@ -71,6 +71,33 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
         Assert.Equal("upload.log", analysis.FileName);
     }
 
+    [Fact]
+    public async Task DeleteRecent_RemovesSavedAnalysis()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/analyze", new
+        {
+            logText = "ERROR Failed to connect to database",
+            fileName = "delete-test.log"
+        });
+        var analysis = await createResponse.Content.ReadFromJsonAsync<AnalysisResponse>();
+        Assert.NotNull(analysis);
+
+        var deleteResponse = await _client.DeleteAsync($"/api/recent/{analysis.Id}");
+
+        Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
+        var recent = await _client.GetFromJsonAsync<List<AnalysisResponse>>("/api/recent?limit=100");
+        Assert.NotNull(recent);
+        Assert.DoesNotContain(recent, item => item.Id == analysis.Id);
+    }
+
+    [Fact]
+    public async Task DeleteRecent_ReturnsNotFoundForUnknownAnalysis()
+    {
+        var response = await _client.DeleteAsync("/api/recent/does-not-exist");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
     private sealed class AnalysisResponse
     {
         public string Id { get; set; } = string.Empty;

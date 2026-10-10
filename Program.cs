@@ -48,6 +48,11 @@ app.MapGet("/health", () => Results.Ok(new
 app.MapGet("/api/recent", async (int? limit, LogAnalysisStore store, CancellationToken cancellationToken) =>
     Results.Ok(await store.GetRecentAsync(limit ?? 10, cancellationToken)));
 
+app.MapDelete("/api/recent/{id}", async (string id, LogAnalysisStore store, CancellationToken cancellationToken) =>
+    await store.DeleteAsync(id, cancellationToken)
+        ? Results.NoContent()
+        : Results.NotFound(new { error = "Analysis not found." }));
+
 app.MapPost("/api/analyze", async (
     LogAnalysisRequest request,
     LogAnalyzerService service,

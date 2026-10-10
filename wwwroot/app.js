@@ -27,6 +27,11 @@ recentList.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-analysis-id]');
   if (!button) return;
 
+  if (button.dataset.action === 'delete') {
+    deleteAnalysis(button.dataset.analysisId);
+    return;
+  }
+
   const analysis = recentAnalyses.find(item => item.id === button.dataset.analysisId);
   if (!analysis) return;
 
@@ -176,6 +181,32 @@ async function loadRecentAnalyses() {
   }
 }
 
+async function deleteAnalysis(id) {
+  if (!window.confirm('Delete this saved analysis? This cannot be undone.')) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/recent/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(await getResponseError(response));
+    }
+
+    if (currentAnalysis?.id === id) {
+      currentAnalysis = null;
+      severityBadge.textContent = 'Awaiting analysis';
+      severityBadge.className = 'badge';
+      fileNameMeta.textContent = 'No file selected';
+      confidenceMeta.textContent = 'Confidence: --';
+      resultContent.innerHTML = '<div class="status">This saved analysis was deleted.</div>';
+    }
+
+    await loadRecentAnalyses();
+  } catch (error) {
+    recentList.innerHTML = `<div class="status">${escapeHtml(error instanceof Error ? error.message : 'Could not delete this analysis.')}</div>`;
+  }
+}
+
 function renderRecentAnalyses() {
   if (recentAnalyses.length === 0) {
     historyCount.textContent = '';
@@ -215,7 +246,10 @@ function renderRecentAnalyses() {
         </h4>
         <div class="status">${escapeHtml(item.summary || 'No summary')}</div>
         <div class="status">Confidence: ${Number(item.confidence ?? 0)}% · ${new Date(item.analyzedAt).toLocaleString()}</div>
-        <button class="secondary" type="button" data-analysis-id="${escapeHtml(item.id)}">View analysis</button>
+        <div class="history-item-actions">
+          <button class="secondary" type="button" data-analysis-id="${escapeHtml(item.id)}">View analysis</button>
+          <button class="danger" type="button" data-action="delete" data-analysis-id="${escapeHtml(item.id)}">Delete</button>
+        </div>
       </div>
     `).join('');
 }

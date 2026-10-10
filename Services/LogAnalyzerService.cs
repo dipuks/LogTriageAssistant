@@ -58,6 +58,11 @@ public class LogAnalyzerService
             }
 
             var category = DetectCategory(line);
+            if (category is null && EvaluateSeverity(line) != "INFO")
+            {
+                category = "General";
+            }
+
             if (category is null)
             {
                 continue;

@@ -41,6 +41,17 @@ public class LogAnalyzerServiceTests
     }
 
     [Theory]
+    [InlineData("ERROR request failed", "HIGH")]
+    [InlineData("WARN request is degraded", "MEDIUM")]
+    public void Analyze_ReportsGenericSeveritySignalsAsGeneralFindings(string line, string expectedSeverity)
+    {
+        var finding = Assert.Single(_service.Analyze(line).Findings);
+
+        Assert.Equal("General", finding.Category);
+        Assert.Equal(expectedSeverity, finding.Severity);
+    }
+
+    [Theory]
     [InlineData("ERROR Redis cache unavailable", "Cache")]
     [InlineData("ERROR malformed JSON unexpected token", "Data / Serialization")]
     [InlineData("WARN high CPU queue backlog", "Performance")]

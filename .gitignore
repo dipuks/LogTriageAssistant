@@ -1,0 +1,14 @@
+bin/
+obj/
+.vscode/
+.idea/
+*.user
+*.suo
+*.cache
+*.dll
+*.pdb
+*.log
+App_Data/
+*.db
+*.db-shm
+*.db-wal

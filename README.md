@@ -1,0 +1,63 @@
+# LogTriage Assistant
+
+A .NET 10 ASP.NET Core app for triaging runtime logs, application failures, dependency timeouts, and deployment issues.
+
+## Features
+
+- Paste log text directly into the browser UI
+- Upload a log file from disk
+- Detect likely failure categories and root-cause areas
+- Produce a summary with confidence score and severity
+- Suggest actions to investigate next
+- Save recent analyses to a local SQLite database
+- Accept log text and file uploads up to 2 MB
+- Run in Docker, with a GitHub Actions build check
+
+## Run locally
+
+```powershell
+cd C:\Projects\LogTriageAssistant
+dotnet restore
+dotnet run
+```
+
+Open the local address printed by `dotnet run` in a browser. The SQLite database is created automatically at `App_Data\logtriage.db`.
+
+To store the database elsewhere, set the `Storage__DatabasePath` environment variable before starting the app.
+
+## Run with Docker
+
+```powershell
+docker build -t logtriage .
+docker run --rm -p 8080:8080 -v logtriage-data:/app/App_Data logtriage
+```
+
+Open `http://localhost:8080`. The named Docker volume keeps the SQLite database when the container is replaced.
+
+## Example API
+
+### Analyze raw log text
+
+```http
+POST /api/analyze
+Content-Type: application/json
+
+{
+  "logText": "2026-10-06 12:18:01 ERROR Failed to connect to database",
+  "fileName": "sample.log"
+}
+```
+
+### Upload a file
+
+```powershell
+curl.exe -F "file=@sample.log" http://localhost:8080/api/analyze-file
+```
+
+The upload field must be named `file`. `/api/recent?limit=10` returns the newest saved analyses; the limit is clamped to 1-100. `/health` reports application health.
+
+## Current limitations
+
+- Analysis uses local, explainable keyword rules; it does not send logs to an AI service.
+- SQLite is intended for local/single-instance use. Multi-instance deployments need shared durable storage.
+- Full uploaded log files are not stored. Saved analysis results include matched log-line excerpts, clipped to 220 characters, so avoid submitting secrets or sensitive production data.

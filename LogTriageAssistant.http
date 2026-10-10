@@ -1,0 +1,6 @@
+@LogTriageAssistant_HostAddress = http://localhost:5219
+
+GET {{LogTriageAssistant_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

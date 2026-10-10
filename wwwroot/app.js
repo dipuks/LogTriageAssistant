@@ -10,6 +10,9 @@ const severityBadge = document.getElementById('severityBadge');
 const fileNameMeta = document.getElementById('fileNameMeta');
 const confidenceMeta = document.getElementById('confidenceMeta');
 const recentList = document.getElementById('recentList');
+const historySearch = document.getElementById('historySearch');
+const historySeverity = document.getElementById('historySeverity');
+const historyCount = document.getElementById('historyCount');
 
 let currentAnalysis = null;
 let recentAnalyses = [];
@@ -30,6 +33,9 @@ recentList.addEventListener('click', (event) => {
   renderResult(analysis, analysis.fileName);
   document.getElementById('resultPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
+
+historySearch.addEventListener('input', renderRecentAnalyses);
+historySeverity.addEventListener('change', renderRecentAnalyses);
 
 sampleBtn.addEventListener('click', () => {
   logInput.value = sampleLog;
@@ -156,20 +162,52 @@ function showError(error) {
 
 async function loadRecentAnalyses() {
   try {
-    const response = await fetch('/api/recent');
+    const response = await fetch('/api/recent?limit=100');
     if (!response.ok) {
       throw new Error('Recent analyses request failed');
     }
 
     const list = await response.json();
-    if (!Array.isArray(list) || list.length === 0) {
-      recentAnalyses = [];
-      recentList.innerHTML = '<div class="status">No previous analyses yet.</div>';
-      return;
+    recentAnalyses = Array.isArray(list) ? list : [];
+    renderRecentAnalyses();
+  } catch (error) {
+    historyCount.textContent = '';
+    recentList.innerHTML = '<div class="status">Recent analyses are unavailable right now.</div>';
+  }
+}
+
+function renderRecentAnalyses() {
+  if (recentAnalyses.length === 0) {
+    historyCount.textContent = '';
+    recentList.innerHTML = '<div class="status">No previous analyses yet.</div>';
+    return;
+  }
+
+  const query = historySearch.value.trim().toLocaleLowerCase();
+  const severity = historySeverity.value;
+  const filtered = recentAnalyses.filter(item => {
+    if (severity && (item.severity || 'INFO').toUpperCase() !== severity) {
+      return false;
     }
 
-    recentAnalyses = list;
-    recentList.innerHTML = list.map(item => `
+    if (!query) {
+      return true;
+    }
+
+    const findingText = (item.findings || [])
+      .map(finding => `${finding.category} ${finding.message} ${finding.evidence}`)
+      .join(' ');
+    const searchableText = `${item.fileName || ''} ${item.summary || ''} ${item.statistics?.topCategory || ''} ${findingText}`;
+    return searchableText.toLocaleLowerCase().includes(query);
+  });
+
+  historyCount.textContent = `Showing ${filtered.length} of the latest ${recentAnalyses.length} saved analyses`;
+  if (filtered.length === 0) {
+    recentList.innerHTML = '<div class="status">No analyses match the selected filters.</div>';
+    return;
+  }
+
+  recentList.innerHTML = filtered.map(item => `
       <div class="finding">
         <h4>
           <span>${escapeHtml(item.fileName || 'manual-entry.log')}</span>
@@ -180,9 +218,6 @@ async function loadRecentAnalyses() {
         <button class="secondary" type="button" data-analysis-id="${escapeHtml(item.id)}">View analysis</button>
       </div>
     `).join('');
-  } catch (error) {
-    recentList.innerHTML = '<div class="status">Recent analyses are unavailable right now.</div>';
-  }
 }
 
 function renderResult(data, fileName) {

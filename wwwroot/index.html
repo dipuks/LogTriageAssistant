@@ -190,8 +190,34 @@
       font-size: 0.9rem;
     }
 
+    .history-filters {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 200px;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .history-filters label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .history-filters input,
+    .history-filters select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #0b1220;
+      color: var(--text);
+      font: inherit;
+    }
+
     @media (max-width: 800px) {
       .grid { grid-template-columns: 1fr; }
+      .history-filters { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -230,6 +256,21 @@
 
     <div class="panel" style="margin-top:20px;">
       <h3 style="margin-top:0;">Recent analyses</h3>
+      <div class="history-filters">
+        <label for="historySearch">Search saved analyses
+          <input id="historySearch" type="search" placeholder="Search file name, summary, or finding..." />
+        </label>
+        <label for="historySeverity">Severity
+          <select id="historySeverity">
+            <option value="">All severities</option>
+            <option value="CRITICAL">Critical</option>
+            <option value="HIGH">High</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="INFO">Info</option>
+          </select>
+        </label>
+      </div>
+      <div id="historyCount" class="status"></div>
       <div id="recentList" class="status">Loading recent history...</div>
     </div>
   </div>

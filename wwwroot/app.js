@@ -9,6 +9,7 @@ const resultContent = document.getElementById('resultContent');
 const severityBadge = document.getElementById('severityBadge');
 const fileNameMeta = document.getElementById('fileNameMeta');
 const confidenceMeta = document.getElementById('confidenceMeta');
+const actionStatus = document.getElementById('actionStatus');
 const recentList = document.getElementById('recentList');
 const historySearch = document.getElementById('historySearch');
 const historySeverity = document.getElementById('historySeverity');
@@ -56,12 +57,13 @@ clearBtn.addEventListener('click', () => {
   severityBadge.className = 'badge';
   fileNameMeta.textContent = 'No file selected';
   confidenceMeta.textContent = 'Confidence: --';
+  actionStatus.textContent = '';
   resultContent.innerHTML = '<div class="status">Paste a log and click “Analyze Log” to begin.</div>';
 });
 
 copyBtn.addEventListener('click', async () => {
   if (!currentAnalysis) {
-    resultContent.innerHTML = '<div class="status">There is no analysis result to copy yet.</div>';
+    actionStatus.textContent = 'There is no analysis result to copy yet.';
     return;
   }
 
@@ -69,15 +71,15 @@ copyBtn.addEventListener('click', async () => {
 
   try {
     await navigator.clipboard.writeText(summary);
-    resultContent.innerHTML = '<div class="status">Summary copied to the clipboard.</div>';
+    actionStatus.textContent = 'Summary copied to the clipboard.';
   } catch {
-    resultContent.innerHTML = '<div class="status">Clipboard access is blocked in this browser.</div>';
+    actionStatus.textContent = 'Clipboard access is blocked in this browser.';
   }
 });
 
 downloadBtn.addEventListener('click', () => {
   if (!currentAnalysis) {
-    resultContent.innerHTML = '<div class="status">There is no analysis result to download yet.</div>';
+    actionStatus.textContent = 'There is no analysis result to download yet.';
     return;
   }
 
@@ -89,7 +91,8 @@ downloadBtn.addEventListener('click', () => {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  actionStatus.textContent = 'Analysis JSON downloaded.';
 });
 
 analyzeBtn.addEventListener('click', async () => {
@@ -106,6 +109,13 @@ fileInput.addEventListener('change', async (event) => {
   const file = event.target.files[0];
   if (!file) return;
 
+  if (file.size > 2 * 1024 * 1024) {
+    actionStatus.textContent = 'Uploaded files must be no larger than 2 MB.';
+    fileInput.value = '';
+    return;
+  }
+
+  actionStatus.textContent = '';
   const formData = new FormData();
   formData.append('file', file);
 

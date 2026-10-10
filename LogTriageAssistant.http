@@ -1,6 +1,21 @@
-@LogTriageAssistant_HostAddress = http://localhost:5219
+@LogTriageAssistant_HostAddress = http://localhost:8080
 
-GET {{LogTriageAssistant_HostAddress}}/weatherforecast/
+GET {{LogTriageAssistant_HostAddress}}/health
+Accept: application/json
+
+###
+
+POST {{LogTriageAssistant_HostAddress}}/api/analyze
+Content-Type: application/json
+
+{
+  "logText": "2026-10-06 12:18:01 ERROR Failed to connect to database",
+  "fileName": "sample.log"
+}
+
+###
+
+GET {{LogTriageAssistant_HostAddress}}/api/recent?limit=10
 Accept: application/json
 
 ###

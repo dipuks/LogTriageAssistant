@@ -10,6 +10,8 @@ A .NET 10 ASP.NET Core app for triaging runtime logs, application failures, depe
 - Produce a summary with confidence score and severity
 - Suggest actions to investigate next
 - Save recent analyses to a local SQLite database
+- Reopen full saved results from the recent analyses list
+- Run analyzer unit and API integration tests with `dotnet test`
 - Accept log text and file uploads up to 2 MB
 - Run in Docker, with a GitHub Actions build check
 
@@ -22,6 +24,12 @@ dotnet run
 ```
 
 Open the local address printed by `dotnet run` in a browser. The SQLite database is created automatically at `App_Data\logtriage.db`.
+
+Run the analyzer unit and API integration tests with:
+
+```powershell
+dotnet test Tests\LogTriageAssistant.Tests.csproj
+```
 
 To store the database elsewhere, set the `Storage__DatabasePath` environment variable before starting the app.
 

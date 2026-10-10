@@ -12,12 +12,24 @@ const confidenceMeta = document.getElementById('confidenceMeta');
 const recentList = document.getElementById('recentList');
 
 let currentAnalysis = null;
+let recentAnalyses = [];
 
 const sampleLog = `2026-10-06 12:18:01 ERROR Failed to connect to database
 2026-10-06 12:18:03 WARN Retrying request to API gateway
 2026-10-06 12:18:09 ERROR Timeout while waiting for upstream service
 2026-10-06 12:18:11 Exception: System.InvalidOperationException: service unavailable
 2026-10-06 12:18:15 FATAL Resource exhaustion detected after 5000 requests`;
+
+recentList.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-analysis-id]');
+  if (!button) return;
+
+  const analysis = recentAnalyses.find(item => item.id === button.dataset.analysisId);
+  if (!analysis) return;
+
+  renderResult(analysis, analysis.fileName);
+  document.getElementById('resultPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 
 sampleBtn.addEventListener('click', () => {
   logInput.value = sampleLog;
@@ -151,10 +163,12 @@ async function loadRecentAnalyses() {
 
     const list = await response.json();
     if (!Array.isArray(list) || list.length === 0) {
+      recentAnalyses = [];
       recentList.innerHTML = '<div class="status">No previous analyses yet.</div>';
       return;
     }
 
+    recentAnalyses = list;
     recentList.innerHTML = list.map(item => `
       <div class="finding">
         <h4>
@@ -163,6 +177,7 @@ async function loadRecentAnalyses() {
         </h4>
         <div class="status">${escapeHtml(item.summary || 'No summary')}</div>
         <div class="status">Confidence: ${Number(item.confidence ?? 0)}% · ${new Date(item.analyzedAt).toLocaleString()}</div>
+        <button class="secondary" type="button" data-analysis-id="${escapeHtml(item.id)}">View analysis</button>
       </div>
     `).join('');
   } catch (error) {

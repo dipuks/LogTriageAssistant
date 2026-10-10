@@ -35,6 +35,16 @@ var app = builder.Build();
 
 await app.Services.GetRequiredService<LogAnalysisStore>().InitializeAsync();
 
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["Content-Security-Policy"] =
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    await next();
+});
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();

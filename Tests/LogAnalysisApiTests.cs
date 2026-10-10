@@ -28,6 +28,20 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     }
 
     [Fact]
+    public async Task HomePage_IncludesBrowserSecurityHeaders()
+    {
+        var response = await _client.GetAsync("/");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(
+            response.Headers.GetValues("Content-Security-Policy"),
+            value => value.Contains("default-src 'self'", StringComparison.Ordinal));
+        Assert.Contains("nosniff", response.Headers.GetValues("X-Content-Type-Options"));
+        Assert.Contains("DENY", response.Headers.GetValues("X-Frame-Options"));
+        Assert.Contains("no-referrer", response.Headers.GetValues("Referrer-Policy"));
+    }
+
+    [Fact]
     public async Task Analyze_RejectsEmptyLogText()
     {
         var response = await _client.PostAsJsonAsync("/api/analyze", new { logText = " " });

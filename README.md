@@ -16,10 +16,13 @@ A .NET 10 ASP.NET Core app for triaging runtime logs, application failures, depe
 - Produce a summary with a heuristic signal score and severity (the score is not a calibrated probability)
 - Suggest actions to investigate next
 - Save recent analyses to a local SQLite database
+- Search and filter all retained analyses with bounded, server-side pagination
 - Reopen full saved results from the recent analyses list
 - Delete saved analyses from history
-- Search saved analyses by file name, summary, or finding and filter by severity
+- Check process liveness and database readiness independently
+- Redact common credential assignments, provider token formats, database URL credentials, bearer tokens, and email addresses in matched excerpts
 - Run analyzer unit and API integration tests with `dotnet test`
+- Exercise the browser UI with Playwright end-to-end tests
 - Accept log text and file uploads up to 2 MB
 - Run in Docker, with a GitHub Actions build check
 
@@ -58,6 +61,17 @@ Run the analyzer unit and API integration tests from the repository root with:
 dotnet test
 ```
 
+Run the browser end-to-end tests with:
+
+```powershell
+dotnet build --configuration Release
+npm ci
+npx playwright install chromium
+npm run test:e2e
+```
+
+The browser tests start an isolated app process and temporary SQLite database; they do not use the app's local history.
+
 To store the database elsewhere, set the `Storage__DatabasePath` environment variable before starting the app.
 Saved history is limited to 1,000 analyses by default; set `Storage__MaxSavedAnalyses` to change that limit.
 
@@ -68,7 +82,7 @@ docker build -t logtriage .
 docker run --rm -p 127.0.0.1:8080:8080 -v logtriage-data:/app/App_Data logtriage
 ```
 
-Open `http://localhost:8080`. The named Docker volume keeps the SQLite database when the container is replaced.
+Open `http://localhost:8080`. The named Docker volume keeps the SQLite database when the container is replaced. The GitHub Actions workflow builds and smoke-tests the container image, including a restart with the same data volume.
 
 ## Example API
 
@@ -94,16 +108,21 @@ The upload field must be named `file`.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | Report application health |
+| `GET /health` | Report process liveness |
+| `GET /health/ready` | Check that the app can access its SQLite database |
 | `POST /api/analyze` | Analyze JSON log text |
 | `POST /api/analyze-file` | Analyze a multipart file upload |
 | `GET /api/recent?limit=10` | Read recent saved analyses; limit is clamped to 1-100 |
+| `GET /api/history?page=1&pageSize=20&search=timeout&severity=HIGH` | Search/filter retained analyses with paging; page size is clamped to 1-50 |
+| `GET /api/recent/{id}` | Read one saved analysis |
 | `DELETE /api/recent/{id}` | Delete one saved analysis |
 
 ## Current limitations
 
 - Analysis uses local, explainable keyword rules; it does not send logs to an AI service.
-- SQLite is intended for local/single-instance use. Multi-instance deployments need shared durable storage.
+- SQLite is intended for a single application instance using local persistent storage. Multi-instance deployments need shared durable storage and coordinated retention.
 - The app does not include authentication. Keep it on a trusted machine/network and do not expose it directly to the public internet.
-- Full uploaded log files are not stored. Saved results contain matched excerpts up to 220 characters after basic secret/email redaction; redaction uses patterns and cannot guarantee removal of every sensitive value.
+- Full uploaded log files are not stored. Saved results contain matched excerpts up to 220 characters after pattern-based redaction; redaction cannot guarantee removal of every sensitive value. Review logs and results before sharing them.
 - Saved analysis history is capped at 1,000 items by default. Configure `Storage__MaxSavedAnalyses` to change the cap; deletion and retention remove records from SQLite but do not securely overwrite database storage.
+- History search operates on saved analysis JSON and is bounded by the retention cap; it is not a full-text log archive.
+- Container smoke tests run in GitHub Actions. A local Docker engine is not required for the .NET and browser tests, but is required to run the Docker commands above.

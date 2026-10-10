@@ -60,8 +60,60 @@ app.MapGet("/health", () => Results.Ok(new
     timestamp = DateTimeOffset.UtcNow
 }));
 
+app.MapGet("/health/ready", async (
+    LogAnalysisStore store,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var isReady = await store.CheckHealthAsync(cancellationToken);
+        return isReady
+            ? Results.Ok(new { status = "ready" })
+            : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (SqliteException exception)
+    {
+        logger.LogWarning(exception, "SQLite readiness check failed.");
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+});
+
+app.MapGet("/api/history", async (
+    int? page,
+    int? pageSize,
+    string? search,
+    string? severity,
+    LogAnalysisStore store,
+    CancellationToken cancellationToken) =>
+{
+    if (search?.Length > 100)
+    {
+        return Results.BadRequest(new { error = "Search text must be no longer than 100 characters." });
+    }
+
+    if (!string.IsNullOrEmpty(severity) &&
+        !new[] { "CRITICAL", "HIGH", "MEDIUM", "INFO" }.Contains(severity, StringComparer.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { error = "Severity must be CRITICAL, HIGH, MEDIUM, or INFO." });
+    }
+
+    var history = await store.GetHistoryAsync(
+        page ?? 1,
+        pageSize ?? 20,
+        search,
+        string.IsNullOrWhiteSpace(severity) ? null : severity.ToUpperInvariant(),
+        cancellationToken);
+    return Results.Ok(history);
+});
+
 app.MapGet("/api/recent", async (int? limit, LogAnalysisStore store, CancellationToken cancellationToken) =>
     Results.Ok(await store.GetRecentAsync(limit ?? 10, cancellationToken)));
+
+app.MapGet("/api/recent/{id}", async (string id, LogAnalysisStore store, CancellationToken cancellationToken) =>
+    await store.GetByIdAsync(id, cancellationToken) is { } analysis
+        ? Results.Ok(analysis)
+        : Results.NotFound(new { error = "Analysis not found." }));
 
 app.MapDelete("/api/recent/{id}", async (string id, LogAnalysisStore store, CancellationToken cancellationToken) =>
     await store.DeleteAsync(id, cancellationToken)

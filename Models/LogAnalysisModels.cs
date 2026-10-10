@@ -39,3 +39,18 @@ public class LogFinding
     public string Evidence { get; set; } = string.Empty;
     public string Suggestion { get; set; } = string.Empty;
 }
+
+public sealed record LogAnalysisHistoryItem(
+    string Id,
+    DateTimeOffset AnalyzedAt,
+    string? FileName,
+    string Severity,
+    string Summary,
+    double Confidence);
+
+public sealed record LogAnalysisHistoryPage(
+    IReadOnlyList<LogAnalysisHistoryItem> Items,
+    int TotalCount,
+    int Page,
+    int PageSize,
+    int TotalPages);

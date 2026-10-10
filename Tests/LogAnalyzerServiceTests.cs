@@ -112,6 +112,19 @@ public class LogAnalyzerServiceTests
         Assert.Equal(finding.Message, finding.Evidence);
     }
 
+    [Theory]
+    [InlineData("ERROR database failed password=hunter2", "hunter2")]
+    [InlineData("ERROR authentication failed ghp_1234567890123456789012345678901234", "ghp_1234567890123456789012345678901234")]
+    [InlineData("ERROR database failed postgres://alice:hunter2@db.internal/app", "hunter2")]
+    [InlineData("ERROR authentication failed AKIA1234567890ABCDEF", "AKIA1234567890ABCDEF")]
+    public void Analyze_RedactsCommonSecretFormatsFromFindings(string line, string secret)
+    {
+        var finding = Assert.Single(_service.Analyze(line).Findings);
+
+        Assert.DoesNotContain(secret, finding.Message);
+        Assert.Contains("[REDACTED", finding.Message);
+    }
+
     [Fact]
     public void Analyze_StoresOnlyFileNameWithoutPath()
     {

@@ -32,6 +32,14 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     }
 
     [Fact]
+    public async Task Readiness_ReturnsReadyWhenDatabaseIsAvailable()
+    {
+        var response = await _client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HomePage_IncludesBrowserSecurityHeaders()
     {
         var response = await _client.GetAsync("/");
@@ -82,6 +90,60 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
 
         Assert.NotNull(recent);
         Assert.Contains(recent, item => item.Id == analysis.Id);
+    }
+
+    [Fact]
+    public async Task History_ReturnsFilteredPaginatedSummariesAndAnalysisCanBeReopened()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateClient();
+        await CreateAnalysisAsync(client, "ERROR database page-marker-one");
+        await CreateAnalysisAsync(client, "WARN retrying page-marker-two");
+        var third = await CreateAnalysisAsync(client, "ERROR database page-marker-three");
+
+        var page = await client.GetFromJsonAsync<HistoryPageResponse>(
+            "/api/history?page=1&pageSize=1&search=page-marker&severity=HIGH");
+
+        Assert.NotNull(page);
+        Assert.Equal(2, page.TotalCount);
+        Assert.Equal(2, page.TotalPages);
+        Assert.Equal(third.Id, Assert.Single(page.Items).Id);
+
+        var reopened = await client.GetFromJsonAsync<AnalysisResponse>($"/api/recent/{third.Id}");
+
+        Assert.NotNull(reopened);
+        Assert.Equal(third.Id, reopened.Id);
+    }
+
+    [Fact]
+    public async Task History_RejectsSearchLongerThanOneHundredCharacters()
+    {
+        var response = await _client.GetAsync($"/api/history?search={new string('x', 101)}");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task History_RejectsUnsupportedSeverity()
+    {
+        var response = await _client.GetAsync("/api/history?severity=UNKNOWN");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task History_TreatsSearchWildcardsAsLiteralText()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateClient();
+        await CreateAnalysisAsync(client, "ERROR database pageXmarker");
+
+        var page = await client.GetFromJsonAsync<HistoryPageResponse>(
+            "/api/history?search=page_marker");
+
+        Assert.NotNull(page);
+        Assert.Equal(0, page.TotalCount);
+        Assert.Empty(page.Items);
     }
 
     [Fact]
@@ -221,6 +283,27 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
         public string? FileName { get; set; }
         public string Severity { get; set; } = string.Empty;
         public AnalysisStatistics Statistics { get; set; } = new();
+    }
+
+    private static async Task<AnalysisResponse> CreateAnalysisAsync(HttpClient client, string logText)
+    {
+        var response = await client.PostAsJsonAsync("/api/analyze", new { logText });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var analysis = await response.Content.ReadFromJsonAsync<AnalysisResponse>();
+        Assert.NotNull(analysis);
+        return analysis;
+    }
+
+    private sealed class HistoryPageResponse
+    {
+        public List<HistoryItemResponse> Items { get; set; } = new();
+        public int TotalCount { get; set; }
+        public int TotalPages { get; set; }
+    }
+
+    private sealed class HistoryItemResponse
+    {
+        public string Id { get; set; } = string.Empty;
     }
 
     private sealed class AnalysisStatistics

@@ -14,9 +14,16 @@ const recentList = document.getElementById('recentList');
 const historySearch = document.getElementById('historySearch');
 const historySeverity = document.getElementById('historySeverity');
 const historyCount = document.getElementById('historyCount');
+const historyPrevious = document.getElementById('historyPrevious');
+const historyNext = document.getElementById('historyNext');
 
 let currentAnalysis = null;
 let recentAnalyses = [];
+let historyPage = 1;
+let totalHistoryPages = 0;
+let totalHistoryCount = 0;
+let historyRequestId = 0;
+let historySearchTimeout;
 
 const sampleLog = `2026-10-06 12:18:01 ERROR Failed to connect to database
 2026-10-06 12:18:03 WARN Retrying request to API gateway
@@ -33,15 +40,32 @@ recentList.addEventListener('click', (event) => {
     return;
   }
 
-  const analysis = recentAnalyses.find(item => item.id === button.dataset.analysisId);
-  if (!analysis) return;
-
-  renderResult(analysis, analysis.fileName);
-  document.getElementById('resultPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  openAnalysis(button.dataset.analysisId);
 });
 
-historySearch.addEventListener('input', renderRecentAnalyses);
-historySeverity.addEventListener('change', renderRecentAnalyses);
+historySearch.addEventListener('input', () => {
+  clearTimeout(historySearchTimeout);
+  historySearchTimeout = setTimeout(() => {
+    historyPage = 1;
+    loadRecentAnalyses();
+  }, 250);
+});
+historySeverity.addEventListener('change', () => {
+  historyPage = 1;
+  loadRecentAnalyses();
+});
+historyPrevious.addEventListener('click', () => {
+  if (historyPage > 1) {
+    historyPage--;
+    loadRecentAnalyses();
+  }
+});
+historyNext.addEventListener('click', () => {
+  if (historyPage < totalHistoryPages) {
+    historyPage++;
+    loadRecentAnalyses();
+  }
+});
 
 sampleBtn.addEventListener('click', () => {
   logInput.value = sampleLog;
@@ -132,6 +156,7 @@ fileInput.addEventListener('change', async (event) => {
     const data = await response.json();
     fileNameMeta.textContent = file.name;
     renderResult(data, file.name);
+    historyPage = 1;
     await loadRecentAnalyses();
     logInput.value = await file.text();
   } catch (error) {
@@ -155,6 +180,7 @@ async function analyzeLog(logText, fileName) {
 
     const data = await response.json();
     renderResult(data, fileName);
+    historyPage = 1;
     await loadRecentAnalyses();
   } catch (error) {
     showError(error);
@@ -176,18 +202,48 @@ function showError(error) {
 }
 
 async function loadRecentAnalyses() {
+  const requestId = ++historyRequestId;
   try {
-    const response = await fetch('/api/recent?limit=100');
+    const params = new URLSearchParams({
+      page: String(historyPage),
+      pageSize: '20'
+    });
+    if (historySearch.value.trim()) params.set('search', historySearch.value.trim());
+    if (historySeverity.value) params.set('severity', historySeverity.value);
+
+    const response = await fetch(`/api/history?${params}`);
     if (!response.ok) {
       throw new Error('Recent analyses request failed');
     }
 
-    const list = await response.json();
-    recentAnalyses = Array.isArray(list) ? list : [];
+    const history = await response.json();
+    if (requestId !== historyRequestId) return;
+    recentAnalyses = history.items || [];
+    historyPage = history.page;
+    totalHistoryPages = history.totalPages;
+    totalHistoryCount = history.totalCount;
     renderRecentAnalyses();
   } catch (error) {
+    if (requestId !== historyRequestId) return;
     historyCount.textContent = '';
     recentList.innerHTML = '<div class="status">Recent analyses are unavailable right now.</div>';
+    historyPrevious.disabled = true;
+    historyNext.disabled = true;
+  }
+}
+
+async function openAnalysis(id) {
+  try {
+    const response = await fetch(`/api/recent/${encodeURIComponent(id)}`);
+    if (!response.ok) {
+      throw new Error(await getResponseError(response));
+    }
+
+    const analysis = await response.json();
+    renderResult(analysis, analysis.fileName);
+    document.getElementById('resultPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) {
+    recentList.innerHTML = `<div class="status">${escapeHtml(error instanceof Error ? error.message : 'Could not load this analysis.')}</div>`;
   }
 }
 
@@ -218,37 +274,19 @@ async function deleteAnalysis(id) {
 }
 
 function renderRecentAnalyses() {
+  historyPrevious.disabled = historyPage <= 1;
+  historyNext.disabled = historyPage >= totalHistoryPages;
   if (recentAnalyses.length === 0) {
-    historyCount.textContent = '';
-    recentList.innerHTML = '<div class="status">No previous analyses yet.</div>';
-    return;
-  }
-
-  const query = historySearch.value.trim().toLocaleLowerCase();
-  const severity = historySeverity.value;
-  const filtered = recentAnalyses.filter(item => {
-    if (severity && (item.severity || 'INFO').toUpperCase() !== severity) {
-      return false;
-    }
-
-    if (!query) {
-      return true;
-    }
-
-    const findingText = (item.findings || [])
-      .map(finding => `${finding.category} ${finding.message} ${finding.evidence}`)
-      .join(' ');
-    const searchableText = `${item.fileName || ''} ${item.summary || ''} ${item.statistics?.topCategory || ''} ${findingText}`;
-    return searchableText.toLocaleLowerCase().includes(query);
-  });
-
-  historyCount.textContent = `Showing ${filtered.length} of the latest ${recentAnalyses.length} saved analyses`;
-  if (filtered.length === 0) {
+    historyCount.textContent = 'Showing 0 of 0 saved analyses';
     recentList.innerHTML = '<div class="status">No analyses match the selected filters.</div>';
     return;
   }
 
-  recentList.innerHTML = filtered.map(item => `
+  const firstItem = (historyPage - 1) * 20 + 1;
+  const lastItem = firstItem + recentAnalyses.length - 1;
+  historyCount.textContent = `Showing ${firstItem}-${lastItem} of ${totalHistoryCount} matching analyses · Page ${historyPage} of ${totalHistoryPages}`;
+
+  recentList.innerHTML = recentAnalyses.map(item => `
       <div class="finding">
         <h4>
           <span>${escapeHtml(item.fileName || 'manual-entry.log')}</span>

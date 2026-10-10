@@ -12,7 +12,50 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-restore
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - run: node --check wwwroot/app.js
+      - name: Build Docker image
+        run: docker build --tag logtriage:ci .
+      - name: Smoke-test container health and persistent history
+        shell: bash
+        run: |
+          docker volume create logtriage-ci-data
+          cleanup() {
+            docker rm --force logtriage-ci >/dev/null 2>&1 || true
+            docker volume rm logtriage-ci-data >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          start_container() {
+            docker run --detach --name logtriage-ci --publish 127.0.0.1:8080:8080 \
+              --volume logtriage-ci-data:/app/App_Data logtriage:ci
+          }
+          wait_until_ready() {
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent http://127.0.0.1:8080/health/ready; then
+                return 0
+              fi
+              sleep 1
+            done
+            docker logs logtriage-ci
+            return 1
+          }
+          start_container
+          wait_until_ready
+          curl --fail --silent --show-error --request POST \
+            --header 'Content-Type: application/json' \
+            --data '{"logText":"ERROR database container-persistence-smoke","fileName":"container.log"}' \
+            http://127.0.0.1:8080/api/analyze
+          docker rm --force logtriage-ci
+          start_container
+          wait_until_ready
+          curl --fail --silent --show-error \
+            'http://127.0.0.1:8080/api/history?search=container-persistence-smoke' |
+            python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["totalCount"] == 1, data'

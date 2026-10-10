@@ -9,10 +9,19 @@ public class LogAnalyzerService
     private const int MaximumFindings = 500;
     private const int MaximumFileNameLength = 128;
     private static readonly Regex SensitiveAssignmentPattern = new(
-        """(?i)(["']?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
+        """(?i)(["']?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?(?:token|key)|refresh[_-]?token|private[_-]?key|connection[_-]?string|token|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex BearerTokenPattern = new(
         """(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TokenPattern = new(
+        """\b(?:gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,})\b""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex UrlCredentialPattern = new(
+        """(?i)\b((?:https?|ftp|postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/)[^/\s:@]+:[^/\s@]+@""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrivateKeyPattern = new(
+        """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex EmailPattern = new(
         """(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""",
@@ -267,6 +276,9 @@ public class LogAnalyzerService
     {
         var redacted = SensitiveAssignmentPattern.Replace(text, "$1[REDACTED]");
         redacted = BearerTokenPattern.Replace(redacted, "Bearer [REDACTED]");
+        redacted = TokenPattern.Replace(redacted, "[REDACTED_TOKEN]");
+        redacted = UrlCredentialPattern.Replace(redacted, "$1[REDACTED]@");
+        redacted = PrivateKeyPattern.Replace(redacted, "[REDACTED_PRIVATE_KEY]");
         return EmailPattern.Replace(redacted, "[REDACTED_EMAIL]");
     }
 

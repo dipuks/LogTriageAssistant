@@ -41,7 +41,11 @@ public class LogAnalyzerService
     public LogAnalysisResult Analyze(string? rawText, string? fileName = null)
     {
         var text = rawText ?? string.Empty;
-        var lines = text.Split('\n', StringSplitOptions.None);
+        var lines = text.Length == 0 ? Array.Empty<string>() : text.Split('\n', StringSplitOptions.None);
+        if (lines.Length > 0 && lines[^1].Length == 0)
+        {
+            lines = lines[..^1];
+        }
 
         var findings = new List<LogFinding>();
         var categories = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);

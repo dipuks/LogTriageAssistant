@@ -92,6 +92,16 @@ public class LogAnalyzerServiceTests
 
         Assert.Empty(result.Findings);
         Assert.Equal(0, result.Statistics.ErrorLikeLines);
+        Assert.Equal(0, result.Statistics.TotalLines);
+    }
+
+    [Fact]
+    public void Analyze_DoesNotCountTrailingNewlineAsAnAdditionalLine()
+    {
+        var result = _service.Analyze("INFO service started\nERROR database failure\n");
+
+        Assert.Equal(2, result.Statistics.TotalLines);
+        Assert.Equal(2, Assert.Single(result.Findings).LineNumber);
     }
 
     [Fact]

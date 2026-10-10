@@ -142,8 +142,10 @@ public class LogAnalysisStore
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: true);
 
         var countCommand = connection.CreateCommand();
+        countCommand.Transaction = transaction;
         countCommand.CommandText = """
             SELECT COUNT(*)
             FROM Analyses
@@ -158,6 +160,7 @@ public class LogAnalysisStore
         var offset = (long)(boundedPage - 1) * boundedPageSize;
 
         var queryCommand = connection.CreateCommand();
+        queryCommand.Transaction = transaction;
         queryCommand.CommandText = """
             SELECT ResultJson
             FROM Analyses
@@ -172,22 +175,25 @@ public class LogAnalysisStore
         queryCommand.Parameters.AddWithValue("$offset", offset);
 
         var items = new List<LogAnalysisHistoryItem>(boundedPageSize);
-        await using var reader = await queryCommand.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        await using (var reader = await queryCommand.ExecuteReaderAsync(cancellationToken))
         {
-            var result = JsonSerializer.Deserialize<LogAnalysisResult>(reader.GetString(0), JsonOptions);
-            if (result is not null)
+            while (await reader.ReadAsync(cancellationToken))
             {
-                items.Add(new LogAnalysisHistoryItem(
-                    result.Id,
-                    result.AnalyzedAt,
-                    result.FileName,
-                    result.Severity,
-                    result.Summary,
-                    result.Confidence));
+                var result = JsonSerializer.Deserialize<LogAnalysisResult>(reader.GetString(0), JsonOptions);
+                if (result is not null)
+                {
+                    items.Add(new LogAnalysisHistoryItem(
+                        result.Id,
+                        result.AnalyzedAt,
+                        result.FileName,
+                        result.Severity,
+                        result.Summary,
+                        result.Confidence));
+                }
             }
         }
 
+        await transaction.CommitAsync(cancellationToken);
         return new LogAnalysisHistoryPage(items, totalCount, boundedPage, boundedPageSize, totalPages);
     }
 

@@ -96,8 +96,8 @@ downloadBtn.addEventListener('click', () => {
 });
 
 analyzeBtn.addEventListener('click', async () => {
-  const text = logInput.value.trim();
-  if (!text) {
+  const text = logInput.value;
+  if (!text.trim()) {
     resultContent.innerHTML = '<div class="status">Please paste log content first.</div>';
     return;
   }

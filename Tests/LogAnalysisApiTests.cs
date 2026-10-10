@@ -81,6 +81,20 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     }
 
     [Fact]
+    public async Task Analyze_PreservesLeadingBlankLinesForFindingLineNumbers()
+    {
+        var response = await _client.PostAsJsonAsync("/api/analyze", new
+        {
+            logText = "\nERROR Failed to connect to database"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonDocument>();
+        Assert.NotNull(body);
+        Assert.Equal(2, body.RootElement.GetProperty("findings")[0].GetProperty("lineNumber").GetInt32());
+    }
+
+    [Fact]
     public async Task AnalyzeFile_AcceptsMultipartUpload()
     {
         using var form = new MultipartFormDataContent();

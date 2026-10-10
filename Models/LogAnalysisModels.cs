@@ -14,6 +14,7 @@ public class LogAnalysisResult
     public string Summary { get; set; } = string.Empty;
     public string Severity { get; set; } = "INFO";
     public double Confidence { get; set; }
+    public bool FindingsTruncated { get; set; }
     public LogStatistics Statistics { get; set; } = new();
     public List<LogFinding> Findings { get; set; } = new();
     public List<string> Recommendations { get; set; } = new();

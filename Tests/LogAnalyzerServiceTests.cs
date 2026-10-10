@@ -82,4 +82,21 @@ public class LogAnalyzerServiceTests
         Assert.Empty(result.Findings);
         Assert.Equal(0, result.Statistics.ErrorLikeLines);
     }
+
+    [Fact]
+    public void Analyze_LimitsReturnedFindingsButEvaluatesSeverityAcrossAllLines()
+    {
+        var text = string.Join(
+            Environment.NewLine,
+            Enumerable.Repeat("ERROR database problem", 500).Append("FATAL out of memory"));
+
+        var result = _service.Analyze(text);
+
+        Assert.Equal(500, result.Findings.Count);
+        Assert.True(result.FindingsTruncated);
+        Assert.Equal(501, result.Statistics.ErrorLikeLines);
+        Assert.Equal("CRITICAL", result.Severity);
+        Assert.DoesNotContain(result.Findings, finding => finding.Severity == "CRITICAL");
+        Assert.Contains("Only the first 500 findings", result.Summary);
+    }
 }

@@ -278,9 +278,13 @@ function renderResult(data, fileName) {
   `).join('') || '<div class="status">No error signatures found.</div>';
 
   const recommendationsHtml = (data.recommendations || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  const truncationNotice = data.findingsTruncated
+    ? `<div class="status" role="status">Showing the first ${data.findings.length} findings. Overall severity includes all detected lines.</div>`
+    : '';
 
   resultContent.innerHTML = `
     <div class="summary">${escapeHtml(data.summary || 'No summary available.')}</div>
+    ${truncationNotice}
     <div class="meta">
       <span>Lines: ${data.statistics?.totalLines ?? 0}</span>
       <span>Error-like: ${data.statistics?.errorLikeLines ?? 0}</span>

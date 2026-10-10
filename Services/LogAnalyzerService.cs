@@ -5,6 +5,8 @@ namespace LogTriageAssistant.Services;
 
 public class LogAnalyzerService
 {
+    private const int MaximumFindings = 500;
+
     private static readonly Dictionary<string, string[]> CategoryPatterns = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Authentication"] = ["unauthorized", "forbidden", "access denied", "401", "403", "login failed", "token expired"],
@@ -44,6 +46,8 @@ public class LogAnalyzerService
         var findings = new List<LogFinding>();
         var categories = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var errorLikeLines = 0;
+        var highestSeverity = 0;
+        var findingsTruncated = false;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -61,32 +65,41 @@ public class LogAnalyzerService
 
             errorLikeLines++;
             categories[category] = categories.TryGetValue(category, out var count) ? count + 1 : 1;
+            var lineSeverity = EvaluateSeverity(line);
+            highestSeverity = Math.Max(highestSeverity, SeverityWeight(lineSeverity));
 
+            if (findings.Count == MaximumFindings)
+            {
+                findingsTruncated = true;
+                continue;
+            }
+
+            var excerpt = TrimLine(line);
             findings.Add(new LogFinding
             {
                 LineNumber = i + 1,
-                Message = TrimLine(line),
-                Severity = EvaluateSeverity(line),
+                Message = excerpt,
+                Severity = lineSeverity,
                 Category = category,
-                Evidence = TrimLine(line),
+                Evidence = excerpt,
                 Suggestion = RecommendationMap.TryGetValue(category, out var rec) ? rec : RecommendationMap["General"]
             });
         }
 
         var topCategory = categories.Count > 0 ? categories.OrderByDescending(x => x.Value).First().Key : "General";
-        var highestSeverity = findings.Count > 0 ? findings.Max(x => SeverityWeight(x.Severity)) : 0;
-        var severity = ToSeverityString(highestSeverity);
+        var overallSeverity = ToSeverityString(highestSeverity);
 
-        var summary = BuildSummary(topCategory, findings.Count, errorLikeLines, severity);
+        var summary = BuildSummary(topCategory, errorLikeLines, findings.Count, overallSeverity, findingsTruncated);
         var recommendations = GetRecommendations(categories.Keys.ToList(), topCategory);
-        var confidence = CalculateConfidence(findings.Count, categories.Count, errorLikeLines, lines.Length);
+        var confidence = CalculateConfidence(errorLikeLines, categories.Count, errorLikeLines, lines.Length);
 
         return new LogAnalysisResult
         {
             FileName = fileName,
             Summary = summary,
-            Severity = severity,
+            Severity = overallSeverity,
             Confidence = confidence,
+            FindingsTruncated = findingsTruncated,
             Findings = findings,
             Recommendations = recommendations,
             Statistics = new LogStatistics
@@ -163,14 +176,20 @@ public class LogAnalyzerService
         };
     }
 
-    private static string BuildSummary(string topCategory, int findingCount, int errorLikeLines, string severity)
+    private static string BuildSummary(
+        string topCategory,
+        int findingCount,
+        int returnedFindingCount,
+        string severity,
+        bool findingsTruncated)
     {
         if (findingCount == 0)
         {
             return "No significant failure signatures were detected in the supplied log content.";
         }
 
-        return $"Detected {findingCount} actionable findings with the strongest signal in {topCategory}. Overall severity is {severity}, and {errorLikeLines} log lines match error-like patterns.";
+        var truncationNote = findingsTruncated ? $" Only the first {returnedFindingCount} findings are included." : string.Empty;
+        return $"Detected {findingCount} actionable findings with the strongest signal in {topCategory}. Overall severity is {severity}.{truncationNote}";
     }
 
     private static List<string> GetRecommendations(IReadOnlyCollection<string> categories, string topCategory)

@@ -4,12 +4,16 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 
+const int MaxLogContentBytes = 2 * 1024 * 1024;
+const int RequestOverheadAllowanceBytes = 64 * 1024;
+const int MaxRequestBodyBytes = MaxLogContentBytes + RequestOverheadAllowanceBytes;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.Configure<FormOptions>(options =>
 {
-    options.MultipartBodyLengthLimit = 2 * 1024 * 1024;
+    options.MultipartBodyLengthLimit = MaxRequestBodyBytes;
 });
 var databasePath = builder.Configuration["Storage:DatabasePath"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data", "logtriage.db");
@@ -64,7 +68,7 @@ app.MapPost("/api/analyze", async (
         return Results.BadRequest(new { error = "LogText must not be empty." });
     }
 
-    if (request.LogText.Length > 2 * 1024 * 1024)
+    if (System.Text.Encoding.UTF8.GetByteCount(request.LogText) > MaxLogContentBytes)
     {
         return Results.Problem(
             statusCode: StatusCodes.Status413PayloadTooLarge,
@@ -75,7 +79,7 @@ app.MapPost("/api/analyze", async (
     var result = service.Analyze(request.LogText, request.FileName ?? "manual-entry.log");
     await store.AddAsync(result, cancellationToken);
     return Results.Ok(result);
-}).WithMetadata(new RequestSizeLimitAttribute(2 * 1024 * 1024));
+}).WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
 
 app.MapPost("/api/analyze-file", async (
     HttpRequest request,
@@ -88,6 +92,14 @@ app.MapPost("/api/analyze-file", async (
         return Results.BadRequest(new { error = "Expected multipart/form-data upload." });
     }
 
+    if (request.ContentLength > MaxRequestBodyBytes)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status413PayloadTooLarge,
+            title: "Uploaded request is too large.",
+            detail: "Uploaded files must be no larger than 2 MB.");
+    }
+
     var form = await request.ReadFormAsync(cancellationToken);
     var file = form.Files["file"];
     if (file is null || file.Length == 0)
@@ -95,7 +107,7 @@ app.MapPost("/api/analyze-file", async (
         return Results.BadRequest(new { error = "Please upload a file with a non-zero length." });
     }
 
-    if (file.Length > 2 * 1024 * 1024)
+    if (file.Length > MaxLogContentBytes)
     {
         return Results.Problem(
             statusCode: StatusCodes.Status413PayloadTooLarge,
@@ -109,7 +121,7 @@ app.MapPost("/api/analyze-file", async (
     var result = service.Analyze(content, file.FileName);
     await store.AddAsync(result, cancellationToken);
     return Results.Ok(result);
-}).WithMetadata(new RequestSizeLimitAttribute(2 * 1024 * 1024));
+}).WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
 
 app.UseDefaultFiles();
 app.UseStaticFiles();

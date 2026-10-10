@@ -36,6 +36,17 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     }
 
     [Fact]
+    public async Task Analyze_RejectsLogContentOverTwoMegabytes()
+    {
+        var response = await _client.PostAsJsonAsync("/api/analyze", new
+        {
+            logText = new string('x', 2 * 1024 * 1024 + 1)
+        });
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Analyze_SavesResultAndReturnsItInRecentHistory()
     {
         var response = await _client.PostAsJsonAsync("/api/analyze", new
@@ -69,6 +80,18 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
         Assert.NotNull(analysis);
         Assert.Equal("CRITICAL", analysis.Severity);
         Assert.Equal("upload.log", analysis.FileName);
+    }
+
+    [Fact]
+    public async Task AnalyzeFile_RejectsUploadOverTwoMegabytes()
+    {
+        using var form = new MultipartFormDataContent();
+        using var content = new StringContent(new string('x', 2 * 1024 * 1024 + 1));
+        form.Add(content, "file", "oversized.log");
+
+        var response = await _client.PostAsync("/api/analyze-file", form);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
     }
 
     [Fact]

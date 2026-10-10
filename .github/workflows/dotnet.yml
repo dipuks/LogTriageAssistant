@@ -63,8 +63,8 @@ jobs:
             local csrf_response csrf_cookie csrf_token login_status auth_cookie refreshed_cookie
             csrf_response=$(curl --fail --silent --show-error --dump-header "$headers_file" \
               http://127.0.0.1:8080/api/auth/csrf)
-            csrf_cookie=$(python3 -c 'import sys; h=open(sys.argv[1]).read().splitlines(); print(next(x.split(":",1)[1].split(";",1)[0].strip() for x in h if x.lower().startswith("set-cookie: logtriage.csrf="))' "$headers_file")
-            csrf_token=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["token"])' "$csrf_response")
+            csrf_cookie=$(node -e 'const fs=require("fs");const h=fs.readFileSync(process.argv[1],"utf8").split(/\r?\n/);console.log(h.find(x=>x.toLowerCase().startsWith("set-cookie: logtriage.csrf=")).split(":")[1].split(";")[0].trim())' "$headers_file")
+            csrf_token=$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).token)' "$csrf_response")
             login_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
               --dump-header "$headers_file" \
               --request POST --header 'Content-Type: application/json' \
@@ -72,13 +72,13 @@ jobs:
               --data '{"username":"ci-admin","password":"e2e-test-password-123!"}' \
               http://127.0.0.1:8080/api/auth/login)
             test "$login_status" = 204
-            auth_cookie=$(python3 -c 'import sys; h=open(sys.argv[1]).read().splitlines(); print(next(x.split(":",1)[1].split(";",1)[0].strip() for x in h if x.lower().startswith("set-cookie: __host-logtriage.auth="))' "$headers_file")
+            auth_cookie=$(node -e 'const fs=require("fs");const h=fs.readFileSync(process.argv[1],"utf8").split(/\r?\n/);console.log(h.find(x=>x.toLowerCase().startsWith("set-cookie: __host-logtriage.auth=")).split(":")[1].split(";")[0].trim())' "$headers_file")
             csrf_response=$(curl --fail --silent --show-error --dump-header "$headers_file" \
               --header "Cookie: $csrf_cookie; $auth_cookie" \
               http://127.0.0.1:8080/api/auth/csrf)
-            refreshed_cookie=$(python3 -c 'import sys; h=open(sys.argv[1]).read().splitlines(); print(next((x.split(":",1)[1].split(";",1)[0].strip() for x in h if x.lower().startswith("set-cookie: logtriage.csrf=")), "")' "$headers_file")
+            refreshed_cookie=$(node -e 'const fs=require("fs");const h=fs.readFileSync(process.argv[1],"utf8").split(/\r?\n/);const c=h.find(x=>x.toLowerCase().startsWith("set-cookie: logtriage.csrf="));if(c)console.log(c.split(":")[1].split(";")[0].trim())' "$headers_file")
             if [ -n "$refreshed_cookie" ]; then csrf_cookie=$refreshed_cookie; fi
-            csrf_token=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["token"])' "$csrf_response")
+            csrf_token=$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).token)' "$csrf_response")
             COOKIE_HEADER="$csrf_cookie; $auth_cookie"
             CSRF_TOKEN="$csrf_token"
           }
@@ -98,4 +98,4 @@ jobs:
           curl --fail --silent --show-error \
             --header "Cookie: $COOKIE_HEADER" \
             'http://127.0.0.1:8080/api/history?search=container-persistence-smoke' |
-            python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["totalCount"] == 1, data'
+            node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{if(JSON.parse(s).totalCount!==1)process.exitCode=1})'

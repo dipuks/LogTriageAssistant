@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
@@ -17,7 +18,7 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
 
     public LogAnalysisApiTests(LogAnalysisApiFactory factory)
     {
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthenticatedClient();
     }
 
     [Fact]
@@ -29,6 +30,110 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
         using var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonDocument>();
         Assert.NotNull(body);
         Assert.Equal("healthy", body.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task UnauthenticatedRequestsCannotReadSavedAnalysesOrAppShell()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            AllowAutoRedirect = false
+        });
+
+        var apiResponse = await client.GetAsync("/api/history");
+        var appResponse = await client.GetAsync("/");
+        var loginResponse = await client.GetAsync("/login.html");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, apiResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, appResponse.StatusCode);
+        Assert.Equal("/login.html", appResponse.Headers.Location?.AbsolutePath);
+        Assert.True(
+            loginResponse.StatusCode == HttpStatusCode.OK,
+            $"Login page returned {(int)loginResponse.StatusCode} with redirect {loginResponse.Headers.Location}.");
+    }
+
+    [Fact]
+    public async Task Login_RejectsInvalidCredentialsWithGenericResponse()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateUnauthenticatedClient();
+        await factory.AddCsrfTokenAsync(client);
+
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            username = LogAnalysisApiFactory.TestUsername,
+            password = "incorrect-password"
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.DoesNotContain(LogAnalysisApiFactory.TestUsername, await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Login_IssuesHttpOnlySecureStrictSessionCookie()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateUnauthenticatedClient();
+        await factory.AddCsrfTokenAsync(client);
+
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            username = LogAnalysisApiFactory.TestUsername,
+            password = LogAnalysisApiFactory.TestPassword
+        });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var cookie = Assert.Single(
+            response.Headers.GetValues("Set-Cookie"),
+            value => value.StartsWith("__Host-LogTriage.Auth=", StringComparison.Ordinal));
+        Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ProductionMode_RejectsAuthenticationOverPlainHttp()
+    {
+        using var factory = new LogAnalysisApiFactory { UseProductionEnvironment = true };
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("http://localhost"),
+            AllowAutoRedirect = false
+        });
+
+        var response = await client.GetAsync("/api/auth/csrf");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AuthenticatedSessionCanAccessApiAndLogout()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateAuthenticatedClient();
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/auth/status")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/history")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/auth/logout", null)).StatusCode);
+        client.DefaultRequestHeaders.Remove("Cookie");
+
+        var response = await client.GetAsync("/api/history");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ApiWriteRequiresValidCsrfToken()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateAuthenticatedClient();
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
+
+        var response = await client.PostAsJsonAsync("/api/analyze", new { logText = "ERROR test" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
@@ -96,7 +201,7 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     public async Task History_ReturnsFilteredPaginatedSummariesAndAnalysisCanBeReopened()
     {
         using var factory = new LogAnalysisApiFactory();
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthenticatedClient();
         await CreateAnalysisAsync(client, "ERROR database page-marker-one");
         await CreateAnalysisAsync(client, "WARN retrying page-marker-two");
         var third = await CreateAnalysisAsync(client, "ERROR database page-marker-three");
@@ -135,7 +240,7 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     public async Task History_TreatsSearchWildcardsAsLiteralText()
     {
         using var factory = new LogAnalysisApiFactory();
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthenticatedClient();
         await CreateAnalysisAsync(client, "ERROR database pageXmarker");
 
         var page = await client.GetFromJsonAsync<HistoryPageResponse>(
@@ -255,7 +360,7 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     public async Task Analyze_EnforcesConfiguredSavedHistoryLimit()
     {
         using var factory = new LogAnalysisApiFactory { MaxSavedAnalyses = 2 };
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthenticatedClient();
         var ids = new List<string>();
 
         for (var index = 0; index < 3; index++)
@@ -288,7 +393,9 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     private static async Task<AnalysisResponse> CreateAnalysisAsync(HttpClient client, string logText)
     {
         var response = await client.PostAsJsonAsync("/api/analyze", new { logText });
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK,
+            $"Analyze returned {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
         var analysis = await response.Content.ReadFromJsonAsync<AnalysisResponse>();
         Assert.NotNull(analysis);
         return analysis;
@@ -314,16 +421,100 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
 
 public sealed class LogAnalysisApiFactory : WebApplicationFactory<Program>
 {
+    public const string TestUsername = "test-admin";
+    public const string TestPassword = "test-password-123!";
+    private static readonly string TestPasswordHash = new PasswordHasher<object>()
+        .HashPassword(new object(), TestPassword);
     private readonly string _databasePath = Path.Combine(
         Path.GetTempPath(),
         $"logtriage-tests-{Guid.NewGuid():N}.db");
     public int MaxSavedAnalyses { get; set; } = 1000;
+    public bool UseProductionEnvironment { get; set; }
     public string DatabasePath => _databasePath;
+
+    public HttpClient CreateAuthenticatedClient()
+    {
+        var client = CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+        var csrfResponse = client.GetAsync("/api/auth/csrf").GetAwaiter().GetResult();
+        csrfResponse.EnsureSuccessStatusCode();
+        var csrfToken = csrfResponse.Content.ReadFromJsonAsync<CsrfResponse>().GetAwaiter().GetResult();
+        var csrfCookie = GetCookie(csrfResponse, "LogTriage.Csrf");
+        client.DefaultRequestHeaders.Add("Cookie", csrfCookie);
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", csrfToken!.Token);
+
+        var loginResponse = client.PostAsJsonAsync("/api/auth/login", new
+        {
+            username = TestUsername,
+            password = TestPassword
+        }).GetAwaiter().GetResult();
+        loginResponse.EnsureSuccessStatusCode();
+        var authCookie = GetCookie(loginResponse, "__Host-LogTriage.Auth");
+        client.DefaultRequestHeaders.Remove("Cookie");
+        client.DefaultRequestHeaders.Add("Cookie", $"{csrfCookie}; {authCookie}");
+
+        var authenticatedCsrfResponse = client.GetAsync("/api/auth/csrf").GetAwaiter().GetResult();
+        authenticatedCsrfResponse.EnsureSuccessStatusCode();
+        var authenticatedCsrf = authenticatedCsrfResponse.Content
+            .ReadFromJsonAsync<CsrfResponse>()
+            .GetAwaiter()
+            .GetResult();
+        csrfCookie = TryGetCookie(authenticatedCsrfResponse, "LogTriage.Csrf") ?? csrfCookie;
+        client.DefaultRequestHeaders.Remove("Cookie");
+        client.DefaultRequestHeaders.Add("Cookie", $"{csrfCookie}; {authCookie}");
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", authenticatedCsrf!.Token);
+        return client;
+    }
+
+    public HttpClient CreateUnauthenticatedClient()
+    {
+        return CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+    }
+
+    public async Task<string> AddCsrfTokenAsync(HttpClient client)
+    {
+        var csrfResponse = await client.GetAsync("/api/auth/csrf");
+        csrfResponse.EnsureSuccessStatusCode();
+        var csrfToken = await csrfResponse.Content.ReadFromJsonAsync<CsrfResponse>();
+        client.DefaultRequestHeaders.Add("Cookie", GetCookie(csrfResponse, "LogTriage.Csrf"));
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", csrfToken!.Token);
+        return csrfToken.Token;
+    }
+
+    private static string GetCookie(HttpResponseMessage response, string name)
+    {
+        return TryGetCookie(response, name)
+            ?? throw new InvalidOperationException($"The response did not set the {name} cookie.");
+    }
+
+    private static string? TryGetCookie(HttpResponseMessage response, string name)
+    {
+        var cookie = response.Headers.TryGetValues("Set-Cookie", out var setCookieHeaders)
+            ? setCookieHeaders.First(value => value.StartsWith($"{name}=", StringComparison.Ordinal))
+            : null;
+        return cookie?.Split(';', 2)[0];
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        if (UseProductionEnvironment)
+        {
+            builder.UseEnvironment("Production");
+        }
+
         builder.ConfigureTestServices(services =>
         {
+            services.PostConfigure<LogTriageAssistant.Services.AdminAuthOptions>(options =>
+            {
+                options.Username = TestUsername;
+                options.PasswordHash = TestPasswordHash;
+            });
             services.RemoveAll<LogAnalysisStore>();
             var connectionString = new SqliteConnectionStringBuilder
             {
@@ -332,6 +523,11 @@ public sealed class LogAnalysisApiFactory : WebApplicationFactory<Program>
             }.ToString();
             services.AddSingleton(new LogAnalysisStore(connectionString, MaxSavedAnalyses));
         });
+    }
+
+    private sealed class CsrfResponse
+    {
+        public string Token { get; set; } = string.Empty;
     }
 
     protected override void Dispose(bool disposing)

@@ -16,6 +16,7 @@ const historySeverity = document.getElementById('historySeverity');
 const historyCount = document.getElementById('historyCount');
 const historyPrevious = document.getElementById('historyPrevious');
 const historyNext = document.getElementById('historyNext');
+const logoutBtn = document.getElementById('logoutBtn');
 
 let currentAnalysis = null;
 let recentAnalyses = [];
@@ -24,6 +25,7 @@ let totalHistoryPages = 0;
 let totalHistoryCount = 0;
 let historyRequestId = 0;
 let historySearchTimeout;
+let csrfToken = null;
 
 const sampleLog = `2026-10-06 12:18:01 ERROR Failed to connect to database
 2026-10-06 12:18:03 WARN Retrying request to API gateway
@@ -64,6 +66,17 @@ historyNext.addEventListener('click', () => {
   if (historyPage < totalHistoryPages) {
     historyPage++;
     loadRecentAnalyses();
+  }
+});
+logoutBtn.addEventListener('click', async () => {
+  try {
+    await requireSuccessfulResponse(await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: await getCsrfHeaders()
+    }));
+    window.location.assign('/login.html');
+  } catch (error) {
+    actionStatus.textContent = error instanceof Error ? error.message : 'Could not sign out.';
   }
 });
 
@@ -146,12 +159,11 @@ fileInput.addEventListener('change', async (event) => {
   try {
     const response = await fetch('/api/analyze-file', {
       method: 'POST',
+      headers: await getCsrfHeaders(),
       body: formData
     });
 
-    if (!response.ok) {
-      throw new Error(await getResponseError(response));
-    }
+    await requireSuccessfulResponse(response);
 
     const data = await response.json();
     fileNameMeta.textContent = file.name;
@@ -170,13 +182,11 @@ async function analyzeLog(logText, fileName) {
   try {
     const response = await fetch('/api/analyze', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getCsrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ logText, fileName })
     });
 
-    if (!response.ok) {
-      throw new Error(await getResponseError(response));
-    }
+    await requireSuccessfulResponse(response);
 
     const data = await response.json();
     renderResult(data, fileName);
@@ -196,6 +206,29 @@ async function getResponseError(response) {
   }
 }
 
+async function getCsrfHeaders(headers = {}) {
+  if (!csrfToken) {
+    const response = await fetch('/api/auth/csrf');
+    if (!response.ok) {
+      throw new Error(await getResponseError(response));
+    }
+
+    const result = await response.json();
+    csrfToken = result.token;
+  }
+
+  return { ...headers, 'X-CSRF-TOKEN': csrfToken };
+}
+
+async function requireSuccessfulResponse(response) {
+  if (response.status === 401) {
+    window.location.assign('/login.html');
+  }
+  if (!response.ok) {
+    throw new Error(await getResponseError(response));
+  }
+}
+
 function showError(error) {
   const message = error instanceof Error ? error.message : 'An unexpected error occurred.';
   resultContent.innerHTML = `<div class="status">${escapeHtml(message)}</div>`;
@@ -212,9 +245,7 @@ async function loadRecentAnalyses() {
     if (historySeverity.value) params.set('severity', historySeverity.value);
 
     const response = await fetch(`/api/history?${params}`);
-    if (!response.ok) {
-      throw new Error('Recent analyses request failed');
-    }
+    await requireSuccessfulResponse(response);
 
     const history = await response.json();
     if (requestId !== historyRequestId) return;
@@ -235,9 +266,7 @@ async function loadRecentAnalyses() {
 async function openAnalysis(id) {
   try {
     const response = await fetch(`/api/recent/${encodeURIComponent(id)}`);
-    if (!response.ok) {
-      throw new Error(await getResponseError(response));
-    }
+    await requireSuccessfulResponse(response);
 
     const analysis = await response.json();
     renderResult(analysis, analysis.fileName);
@@ -253,10 +282,11 @@ async function deleteAnalysis(id) {
   }
 
   try {
-    const response = await fetch(`/api/recent/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!response.ok) {
-      throw new Error(await getResponseError(response));
-    }
+    const response = await fetch(`/api/recent/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: await getCsrfHeaders()
+    });
+    await requireSuccessfulResponse(response);
 
     if (currentAnalysis?.id === id) {
       currentAnalysis = null;

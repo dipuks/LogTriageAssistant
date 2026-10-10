@@ -19,23 +19,35 @@ jobs:
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-restore
       - run: npm ci
+      - name: Create test-only authentication credentials
+        run: echo "ADMIN_AUTH_PASSWORD_HASH=$(node test-support/create-e2e-password-hash.js)" >> "$GITHUB_ENV"
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - run: node --check wwwroot/app.js
+      - run: node --check wwwroot/login.js
+      - run: node --check e2e/app.spec.js
+      - run: node --check playwright.config.js
+      - run: node --check test-support/create-e2e-password-hash.js
       - name: Build Docker image
         run: docker build --tag logtriage:ci .
       - name: Smoke-test container health and persistent history
         shell: bash
         run: |
           docker volume create logtriage-ci-data
+          headers_file=$(mktemp)
           cleanup() {
             docker rm --force logtriage-ci >/dev/null 2>&1 || true
             docker volume rm logtriage-ci-data >/dev/null 2>&1 || true
+            rm -f "$headers_file"
           }
           trap cleanup EXIT
           start_container() {
             docker run --detach --name logtriage-ci --publish 127.0.0.1:8080:8080 \
-              --volume logtriage-ci-data:/app/App_Data logtriage:ci
+              --volume logtriage-ci-data:/app/App_Data \
+              --env AdminAuth__Username=ci-admin \
+              --env AdminAuth__AllowHttp=true \
+              --env "AdminAuth__PasswordHash=$ADMIN_AUTH_PASSWORD_HASH" \
+              logtriage:ci
           }
           wait_until_ready() {
             for attempt in $(seq 1 30); do
@@ -47,15 +59,43 @@ jobs:
             docker logs logtriage-ci
             return 1
           }
+          sign_in() {
+            local csrf_response csrf_cookie csrf_token login_status auth_cookie refreshed_cookie
+            csrf_response=$(curl --fail --silent --show-error --dump-header "$headers_file" \
+              http://127.0.0.1:8080/api/auth/csrf)
+            csrf_cookie=$(python3 -c 'import sys; h=open(sys.argv[1]).read().splitlines(); print(next(x.split(":",1)[1].split(";",1)[0].strip() for x in h if x.lower().startswith("set-cookie: logtriage.csrf="))' "$headers_file")
+            csrf_token=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["token"])' "$csrf_response")
+            login_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --dump-header "$headers_file" \
+              --request POST --header 'Content-Type: application/json' \
+              --header "Cookie: $csrf_cookie" --header "X-CSRF-TOKEN: $csrf_token" \
+              --data '{"username":"ci-admin","password":"e2e-test-password-123!"}' \
+              http://127.0.0.1:8080/api/auth/login)
+            test "$login_status" = 204
+            auth_cookie=$(python3 -c 'import sys; h=open(sys.argv[1]).read().splitlines(); print(next(x.split(":",1)[1].split(";",1)[0].strip() for x in h if x.lower().startswith("set-cookie: __host-logtriage.auth="))' "$headers_file")
+            csrf_response=$(curl --fail --silent --show-error --dump-header "$headers_file" \
+              --header "Cookie: $csrf_cookie; $auth_cookie" \
+              http://127.0.0.1:8080/api/auth/csrf)
+            refreshed_cookie=$(python3 -c 'import sys; h=open(sys.argv[1]).read().splitlines(); print(next((x.split(":",1)[1].split(";",1)[0].strip() for x in h if x.lower().startswith("set-cookie: logtriage.csrf=")), "")' "$headers_file")
+            if [ -n "$refreshed_cookie" ]; then csrf_cookie=$refreshed_cookie; fi
+            csrf_token=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["token"])' "$csrf_response")
+            COOKIE_HEADER="$csrf_cookie; $auth_cookie"
+            CSRF_TOKEN="$csrf_token"
+          }
           start_container
           wait_until_ready
+          sign_in
           curl --fail --silent --show-error --request POST \
             --header 'Content-Type: application/json' \
+            --header "Cookie: $COOKIE_HEADER" \
+            --header "X-CSRF-TOKEN: $CSRF_TOKEN" \
             --data '{"logText":"ERROR database container-persistence-smoke","fileName":"container.log"}' \
             http://127.0.0.1:8080/api/analyze
           docker rm --force logtriage-ci
           start_container
           wait_until_ready
+          sign_in
           curl --fail --silent --show-error \
+            --header "Cookie: $COOKIE_HEADER" \
             'http://127.0.0.1:8080/api/history?search=container-persistence-smoke' |
             python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["totalCount"] == 1, data'

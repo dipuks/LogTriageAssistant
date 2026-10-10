@@ -6,3 +6,11 @@ bin
 obj
 App_Data
 *.db
+node_modules
+playwright-report
+test-results
+test-support
+e2e
+playwright.config.js
+package.json
+package-lock.json

@@ -31,6 +31,8 @@ public class LogStatistics
 public class LogFinding
 {
     public int LineNumber { get; set; }
+    public int EndLineNumber { get; set; }
+    public string? Timestamp { get; set; }
     public string Message { get; set; } = string.Empty;
     public string Severity { get; set; } = "INFO";
     public string Category { get; set; } = "General";

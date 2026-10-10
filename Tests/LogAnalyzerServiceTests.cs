@@ -114,6 +114,36 @@ public class LogAnalyzerServiceTests
     }
 
     [Fact]
+    public void Analyze_ParsesStructuredJsonLinesAndUsesTimestampAndMessage()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "TestData", "structured-database.jsonl");
+        var result = _service.Analyze(File.ReadAllText(fixturePath), "structured-database.jsonl");
+
+        Assert.Equal(2, result.Findings.Count);
+        var databaseFinding = result.Findings[0];
+        Assert.Equal("Database", databaseFinding.Category);
+        Assert.Equal(2, databaseFinding.LineNumber);
+        Assert.Equal("2026-10-09T14:22:05.000Z", databaseFinding.Timestamp);
+        Assert.Contains("Failed to connect", databaseFinding.Message);
+        Assert.Equal("MEDIUM", result.Findings[1].Severity);
+    }
+
+    [Fact]
+    public void Analyze_GroupsMultilineExceptionIntoOneFindingWithLineRange()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiline-exception.log");
+        var result = _service.Analyze(File.ReadAllText(fixturePath));
+
+        Assert.Equal(2, result.Findings.Count);
+        var exception = result.Findings[0];
+        Assert.Equal(1, exception.LineNumber);
+        Assert.Equal(4, exception.EndLineNumber);
+        Assert.Contains("NpgsqlConnector.ConnectAsync", exception.Message);
+        Assert.Equal(5, result.Findings[1].LineNumber);
+        Assert.Equal(2, result.Statistics.ErrorLikeLines);
+    }
+
+    [Fact]
     public void Analyze_LimitsReturnedFindingsButEvaluatesSeverityAcrossAllLines()
     {
         var text = string.Join(

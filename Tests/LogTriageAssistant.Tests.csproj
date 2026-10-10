@@ -22,4 +22,8 @@
     <ProjectReference Include="..\LogTriageAssistant.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

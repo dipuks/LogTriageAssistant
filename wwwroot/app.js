@@ -277,9 +277,10 @@ function renderResult(data, fileName) {
   const findingsHtml = (data.findings || []).map(find => `
     <div class="finding">
       <h4>
-        <span>Line ${find.lineNumber}</span>
+        <span>${find.endLineNumber > find.lineNumber ? `Lines ${find.lineNumber}-${find.endLineNumber}` : `Line ${find.lineNumber}`}</span>
         <span class="tag ${getSeverityClass(find.severity)}">${find.severity}</span>
       </h4>
+      ${find.timestamp ? `<div class="status">${escapeHtml(find.timestamp)}</div>` : ''}
       <div><strong>${find.category}</strong></div>
       <div>${escapeHtml(find.message)}</div>
       <div class="status">Evidence: ${escapeHtml(find.evidence)}</div>

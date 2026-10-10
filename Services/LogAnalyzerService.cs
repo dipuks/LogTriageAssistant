@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using LogTriageAssistant.Models;
 
@@ -47,22 +48,22 @@ public class LogAnalyzerService
             lines = lines[..^1];
         }
 
+        var logEvents = ParseLogEvents(lines);
         var findings = new List<LogFinding>();
         var categories = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var errorLikeLines = 0;
         var highestSeverity = 0;
         var findingsTruncated = false;
 
-        for (var i = 0; i < lines.Length; i++)
+        foreach (var logEvent in logEvents)
         {
-            var line = lines[i];
-            if (string.IsNullOrWhiteSpace(line))
+            if (string.IsNullOrWhiteSpace(logEvent.SearchText))
             {
                 continue;
             }
 
-            var category = DetectCategory(line);
-            if (category is null && EvaluateSeverity(line) != "INFO")
+            var category = DetectCategory(logEvent.SearchText);
+            if (category is null && EvaluateSeverity(logEvent.SearchText) != "INFO")
             {
                 category = "General";
             }
@@ -74,7 +75,7 @@ public class LogAnalyzerService
 
             errorLikeLines++;
             categories[category] = categories.TryGetValue(category, out var count) ? count + 1 : 1;
-            var lineSeverity = EvaluateSeverity(line);
+            var lineSeverity = EvaluateSeverity(logEvent.SearchText);
             highestSeverity = Math.Max(highestSeverity, SeverityWeight(lineSeverity));
 
             if (findings.Count == MaximumFindings)
@@ -83,10 +84,12 @@ public class LogAnalyzerService
                 continue;
             }
 
-            var excerpt = TrimLine(line);
+            var excerpt = TrimLine(logEvent.DisplayText);
             findings.Add(new LogFinding
             {
-                LineNumber = i + 1,
+                LineNumber = logEvent.LineNumber,
+                EndLineNumber = logEvent.EndLineNumber,
+                Timestamp = logEvent.Timestamp,
                 Message = excerpt,
                 Severity = lineSeverity,
                 Category = category,
@@ -136,6 +139,106 @@ public class LogAnalyzerService
             .Select(match => match.Category)
             .FirstOrDefault();
     }
+
+    private static List<ParsedLogEvent> ParseLogEvents(string[] lines)
+    {
+        var events = new List<ParsedLogEvent>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            if (IsStackTraceContinuation(line) && events.Count > 0)
+            {
+                var previous = events[^1];
+                previous.DisplayText += Environment.NewLine + line.Trim();
+                previous.SearchText += " " + line.Trim();
+                previous.EndLineNumber = i + 1;
+                continue;
+            }
+
+            var parsed = ParseStructuredLine(line);
+            events.Add(new ParsedLogEvent
+            {
+                LineNumber = i + 1,
+                EndLineNumber = i + 1,
+                DisplayText = parsed.Message,
+                SearchText = parsed.SearchText,
+                Timestamp = parsed.Timestamp
+            });
+        }
+
+        return events;
+    }
+
+    private static ParsedStructuredLine ParseStructuredLine(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return new ParsedStructuredLine(line, line, null);
+            }
+
+            var root = document.RootElement;
+            var message = ReadFirstString(root, "message", "msg", "renderedmessage", "@m", "body");
+            var level = ReadFirstString(root, "level", "severity", "loglevel", "@l");
+            var timestamp = ReadFirstString(root, "timestamp", "@t", "time", "datetime");
+            var exception = ReadFirstString(root, "exception", "stacktrace", "stack_trace", "error");
+            var display = string.IsNullOrWhiteSpace(message) ? line : message;
+            var search = string.Join(' ', new[] { line, level, message, exception }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            return new ParsedStructuredLine(display, search, timestamp);
+        }
+        catch (JsonException)
+        {
+            return new ParsedStructuredLine(line, line, null);
+        }
+    }
+
+    private static string? ReadFirstString(JsonElement root, params string[] names)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!names.Contains(property.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return property.Value.ValueKind switch
+            {
+                JsonValueKind.String => property.Value.GetString(),
+                JsonValueKind.Number => property.Value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => property.Value.GetRawText()
+            };
+        }
+
+        return null;
+    }
+
+    private static bool IsStackTraceContinuation(string line)
+    {
+        return Regex.IsMatch(
+            line,
+            @"^\s*(?:at\s+\S+|--- End of stack trace|Caused by:|Inner Exception:|Traceback \(most recent call last\)|File ""[^""]+"", line \d+|\.\.\.\s+\d+\s+more)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private sealed class ParsedLogEvent
+    {
+        public int LineNumber { get; set; }
+        public int EndLineNumber { get; set; }
+        public string DisplayText { get; set; } = string.Empty;
+        public string SearchText { get; set; } = string.Empty;
+        public string? Timestamp { get; set; }
+    }
+
+    private sealed record ParsedStructuredLine(string Message, string SearchText, string? Timestamp);
 
     private static string TrimLine(string line)
     {

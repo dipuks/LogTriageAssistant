@@ -9,6 +9,8 @@ A .NET 10 ASP.NET Core app for triaging runtime logs, application failures, depe
 - Detect likely failure categories and root-cause areas
 - Preserve generic error and warning lines as actionable findings when no specific category matches
 - Weigh multiple matching log signatures and flag performance, cache, and serialization issues
+- Parse common JSON/JSONL log fields and attach .NET/Java/Python-style stack-trace continuation lines to one finding
+- Include source timestamps and line ranges in findings when available
 - Cap displayed findings at 500 per analysis while calculating overall severity across the full log
 - Produce a summary with confidence score and severity
 - Suggest actions to investigate next

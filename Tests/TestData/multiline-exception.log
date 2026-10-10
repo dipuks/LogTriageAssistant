@@ -1,0 +1,5 @@
+2026-10-09 14:22:05 ERROR Failed to connect to PostgreSQL database
+   at Npgsql.Internal.NpgsqlConnector.ConnectAsync(CancellationToken cancellationToken)
+   at Orders.Data.Repository.LoadAsync(Int32 id)
+Caused by: System.Net.Sockets.SocketException: Connection refused
+2026-10-09 14:22:08 WARN Retrying database request

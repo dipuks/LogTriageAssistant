@@ -49,7 +49,6 @@ The analyzer weighs multiple category signatures on each line, keeps a maximum o
 ## Run locally
 
 ```powershell
-cd C:\Projects\LogTriageAssistant
 dotnet restore
 dotnet build
 $env:AdminAuth__Username = "admin"

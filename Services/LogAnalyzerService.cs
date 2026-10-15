@@ -144,8 +144,11 @@ public class LogAnalyzerService
                 continue;
             }
 
-            var category = DetectCategory(logEvent.SearchText);
-            if (category is null && EvaluateSeverity(logEvent.SearchText) != "INFO")
+            // Lines without stack-trace continuations reuse the values computed while parsing.
+            var hasContinuation = logEvent.EndLineNumber != logEvent.LineNumber;
+            var category = hasContinuation ? DetectCategory(logEvent.SearchText) : logEvent.Category;
+            var lineSeverity = hasContinuation ? EvaluateSeverity(logEvent.SearchText) : logEvent.Severity;
+            if (category is null && lineSeverity != "INFO")
             {
                 category = "General";
             }
@@ -157,7 +160,6 @@ public class LogAnalyzerService
 
             errorLikeLines++;
             categories[category] = categories.TryGetValue(category, out var count) ? count + 1 : 1;
-            var lineSeverity = EvaluateSeverity(logEvent.SearchText);
             highestSeverity = Math.Max(highestSeverity, SeverityWeight(lineSeverity));
 
             if (findings.Count == MaximumFindings)
@@ -258,6 +260,8 @@ public class LogAnalyzerService
             }
 
             var parsed = ParseStructuredLine(line);
+            var category = DetectCategory(parsed.SearchText);
+            var severity = EvaluateSeverity(parsed.SearchText);
             events.Add(new ParsedLogEvent
             {
                 LineNumber = i + 1,
@@ -265,7 +269,9 @@ public class LogAnalyzerService
                 DisplayText = parsed.Message,
                 SearchText = parsed.SearchText,
                 Timestamp = parsed.Timestamp,
-                IsActionable = DetectCategory(parsed.SearchText) is not null || EvaluateSeverity(parsed.SearchText) != "INFO"
+                Category = category,
+                Severity = severity,
+                IsActionable = category is not null || severity != "INFO"
             });
         }
 
@@ -274,6 +280,14 @@ public class LogAnalyzerService
 
     private static ParsedStructuredLine ParseStructuredLine(string line)
     {
+        // Only lines that start with '{' can be JSON objects; skipping the parser avoids a thrown exception per
+        // plain-text line, which dominated the cost of analysing plain-text logs.
+        var trimmed = line.AsSpan().TrimStart();
+        if (trimmed.IsEmpty || trimmed[0] != '{')
+        {
+            return new ParsedStructuredLine(line, line, null);
+        }
+
         try
         {
             using var document = JsonDocument.Parse(line);
@@ -334,6 +348,8 @@ public class LogAnalyzerService
         public string DisplayText { get; set; } = string.Empty;
         public string SearchText { get; set; } = string.Empty;
         public string? Timestamp { get; set; }
+        public string? Category { get; set; }
+        public string Severity { get; set; } = "INFO";
         public bool IsActionable { get; set; }
     }
 

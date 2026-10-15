@@ -8,20 +8,49 @@ public class LogAnalyzerService
 {
     private const int MaximumFindings = 500;
     private const int MaximumFileNameLength = 128;
+    private const string RedactedPrivateKey = "[REDACTED_PRIVATE_KEY]";
+
+    // Redaction runs on every finding (stored and returned), on file names, and on the whole log before it is sent to
+    // an AI provider. Secret values are replaced; key names, schemes and the surrounding log text are kept.
+
+    // A PEM private key: BEGIN line, optional PEM headers, base64 body lines and END line, separated by real newlines
+    // or by escaped "\n" inside JSON strings. A truncated block is redacted up to its last base64 line.
+    private static readonly Regex PrivateKeyBlockPattern = new(
+        """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:(?:\r?\n|\\r\\n|\\n)[ \t]*(?:(?:Proc-Type|DEK-Info|Comment):[^\r\n\\]*|[A-Za-z0-9+/=]+(?=\r?\n|\\r\\n|\\n|$|"|-----)))*(?:(?:\r?\n|\\r\\n|\\n)[ \t]*-----END [A-Z0-9 ]*PRIVATE KEY-----)?""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // key=value / key: value / "key":"value" for secret-bearing names. An authorization scheme (Basic, Bearer, ...) is
+    // kept and only the credential after it is replaced.
     private static readonly Regex SensitiveAssignmentPattern = new(
-        """(?i)(["']?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?(?:token|key)|refresh[_-]?token|private[_-]?key|connection[_-]?string|token|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
+        """(?i)(["']?(?:password|passwd|passphrase|pwd|secret|client[_-]?secret|api[_\s-]?key|access[_-]?(?:token|key)|refresh[_-]?token|id[_-]?token|auth[_-]?token|private[_-]?key|connection[_-]?string|account[_-]?key|shared[_-]?access[_-]?(?:key|signature)|sas[_-]?token|credentials?|token|(?:proxy[_-]?)?authorization)["']?\s*[:=]\s*)((?:basic|bearer|negotiate|ntlm|token|sharedkey(?:lite)?)\s+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex BearerTokenPattern = new(
         """(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // "Basic <base64>" anywhere (header values, client logs). Requires a digit or base64 punctuation so ordinary words
+    // after "basic" are left alone.
+    private static readonly Regex BasicCredentialPattern = new(
+        """(?i)\bBasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{8,}={0,2}""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // Digest credentials carry several parameters (username, response hash, nonce); everything after the scheme goes.
+    private static readonly Regex DigestCredentialPattern = new(
+        """(?i)\bDigest\s+(?:[a-z]+=(?:"[^"\r\n]*"|[^\s,;"]+)\s*,?\s*)+""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CookieHeaderPattern = new(
+        """(?i)\b((?:set-)?cookie["']?\s*[:=]\s*["']?)([^\r\n"']+)""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CookieValuePattern = new(
+        """(^|;\s*|,\s*)([^=;,\s]+)=([^;,]*)""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // Secrets passed in URL query strings: SAS signatures, OAuth tokens and codes, passwords and keys.
+    private static readonly Regex QuerySecretPattern = new(
+        """(?i)([?&](?:sig|signature|sas|token|access_token|id_token|refresh_token|code|password|passwd|pwd|secret|client_secret|api[_-]?key|apikey|key|auth)=)[^&\s#"'<>]+""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // Self-identifying vendor credentials that are secret even without a label.
     private static readonly Regex TokenPattern = new(
-        """\b(?:gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,})\b""",
+        """\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{16,}|sk-(?:proj-|ant-[a-z0-9]+-)?[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9]{36}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,})\b""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex UrlCredentialPattern = new(
-        """(?i)\b((?:https?|ftp|postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/)[^/\s:@]+:[^/\s@]+@""",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex PrivateKeyPattern = new(
-        """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*""",
+        """(?i)\b((?:https?|ftp|amqps?|redis|postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/)[^/\s:@]+:[^/\s@]+@""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex EmailPattern = new(
         """(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""",
@@ -60,7 +89,8 @@ public class LogAnalyzerService
 
     public LogAnalysisResult Analyze(string? rawText, string? fileName = null)
     {
-        var text = rawText ?? string.Empty;
+        // Private-key blocks span lines; redact them before splitting (line count and numbers are preserved).
+        var text = RedactPrivateKeyBlocks(rawText ?? string.Empty);
         var lines = text.Length == 0 ? Array.Empty<string>() : text.Split('\n', StringSplitOptions.None);
         if (lines.Length > 0 && lines[^1].Length == 0)
         {
@@ -271,7 +301,7 @@ public class LogAnalyzerService
 
     public static string RedactSensitiveDataForExternalUse(string text)
     {
-        var bearerSafe = BearerTokenPattern.Replace(text, "******");
+        var bearerSafe = BearerTokenPattern.Replace(RedactPrivateKeyBlocks(text), "******");
         return RedactSensitiveDataCore(bearerSafe);
     }
 
@@ -283,13 +313,25 @@ public class LogAnalyzerService
 
     private static string RedactSensitiveDataCore(string text)
     {
-        var redacted = SensitiveAssignmentPattern.Replace(text, "$1[REDACTED]");
+        var redacted = RedactPrivateKeyBlocks(text);
+        redacted = DigestCredentialPattern.Replace(redacted, "Digest [REDACTED] ");
+        redacted = CookieHeaderPattern.Replace(redacted, match =>
+            match.Groups[1].Value + CookieValuePattern.Replace(match.Groups[2].Value, "$1$2=[REDACTED]"));
+        redacted = SensitiveAssignmentPattern.Replace(redacted, "$1$2[REDACTED]");
         redacted = BearerTokenPattern.Replace(redacted, "Bearer [REDACTED]");
+        redacted = BasicCredentialPattern.Replace(redacted, "Basic [REDACTED]");
+        redacted = QuerySecretPattern.Replace(redacted, "$1[REDACTED]");
         redacted = TokenPattern.Replace(redacted, "[REDACTED_TOKEN]");
         redacted = UrlCredentialPattern.Replace(redacted, "$1[REDACTED]@");
-        redacted = PrivateKeyPattern.Replace(redacted, "[REDACTED_PRIVATE_KEY]");
         return EmailPattern.Replace(redacted, "[REDACTED_EMAIL]");
     }
+
+    /// <summary>Replaces every line of a PEM private key with a marker, keeping the number of lines unchanged.</summary>
+    private static string RedactPrivateKeyBlocks(string text) =>
+        text.Contains("PRIVATE KEY-----", StringComparison.Ordinal)
+            ? PrivateKeyBlockPattern.Replace(text, match => string.Join('\n', match.Value.Split('\n')
+                .Select(part => part.EndsWith('\r') ? RedactedPrivateKey + "\r" : RedactedPrivateKey)))
+            : text;
 
     private static string? NormalizeFileName(string? fileName)
     {
@@ -299,7 +341,7 @@ public class LogAnalyzerService
         }
 
         var safeName = fileName.Replace('\\', '/').Split('/').Last().Trim();
-        safeName = new string(safeName.Where(character => !char.IsControl(character)).ToArray());
+        safeName = RedactSensitiveDataCore(new string(safeName.Where(character => !char.IsControl(character)).ToArray()));
         return safeName.Length > MaximumFileNameLength ? safeName[..MaximumFileNameLength] : safeName;
     }
 

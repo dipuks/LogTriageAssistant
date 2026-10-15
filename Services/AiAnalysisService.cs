@@ -127,6 +127,7 @@ public sealed class AiAnalysisService(
                 var result = JsonSerializer.Deserialize<AiAnalysisResult>(content ?? string.Empty, JsonOptions)
                     ?? throw new JsonException("The AI response was empty.");
                 ValidateResult(result);
+                RedactResult(result);
                 result.Provider = selected.Name;
                 result.Model = model;
                 return result;
@@ -198,6 +199,20 @@ public sealed class AiAnalysisService(
         string.IsNullOrEmpty(uri.Fragment) &&
         (uri.Scheme == Uri.UriSchemeHttps ||
          (!requireHttps && uri.Scheme == Uri.UriSchemeHttp));
+
+    /// <summary>
+    /// Defence in depth: the prompt is already redacted, but a provider can echo or invent credential-shaped text, so
+    /// the brief is redacted with the same rules before it is returned.
+    /// </summary>
+    private static void RedactResult(AiAnalysisResult result)
+    {
+        result.Summary = LogAnalyzerService.RedactSensitiveDataForExternalUse(result.Summary);
+        result.LikelyCause = LogAnalyzerService.RedactSensitiveDataForExternalUse(result.LikelyCause);
+        result.Impact = LogAnalyzerService.RedactSensitiveDataForExternalUse(result.Impact);
+        result.Caveat = LogAnalyzerService.RedactSensitiveDataForExternalUse(result.Caveat);
+        result.Evidence = result.Evidence.Select(LogAnalyzerService.RedactSensitiveDataForExternalUse).ToList();
+        result.NextSteps = result.NextSteps.Select(LogAnalyzerService.RedactSensitiveDataForExternalUse).ToList();
+    }
 
     private static void ValidateResult(AiAnalysisResult result)
     {

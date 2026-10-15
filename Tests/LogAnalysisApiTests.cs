@@ -408,6 +408,37 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     }
 
     [Fact]
+    public async Task Analyze_RedactsHeaderConnectionStringUrlAndKeySecretsBeforeReturningAndPersisting()
+    {
+        string[] secrets =
+        [
+            "dXNlcjpzM2NyM3RQYXNz", "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg==", RedactionTests.StripeLiveKey,
+            "AbCdEf1234567890xyzSIG", "sess0123456789abcdef", "PEMBODYLINE1", "PEMBODYLINE2"
+        ];
+        var logText = string.Join('\n',
+            "ERROR upstream call failed Authorization: Basic dXNlcjpzM2NyM3RQYXNz",
+            "ERROR blob failed AccountName=acct;AccountKey=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg==;",
+            "ERROR charge failed using " + RedactionTests.StripeLiveKey,
+            "ERROR download failed https://acct.blob.core.windows.net/c/f?sv=2022-11-02&sig=AbCdEf1234567890xyzSIG",
+            "ERROR request failed Cookie: session=sess0123456789abcdef; theme=dark",
+            "ERROR key load failed -----BEGIN PRIVATE KEY-----",
+            "MIIEvQPEMBODYLINE1abc",
+            "err+PEMBODYLINE2==",
+            "-----END PRIVATE KEY-----");
+
+        var analysis = await CreateAnalysisAsync(_client, logText, "secrets.log");
+        var responseJson = await _client.GetStringAsync($"/api/recent/{analysis.Id}");
+        var recentJson = await _client.GetStringAsync("/api/recent?limit=100");
+
+        foreach (var secret in secrets)
+        {
+            Assert.DoesNotContain(secret, responseJson, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, recentJson, StringComparison.Ordinal);
+        }
+        Assert.Contains("AccountName=acct", responseJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AnalyzeFile_AcceptsMultipartUpload()
     {
         using var form = new MultipartFormDataContent();

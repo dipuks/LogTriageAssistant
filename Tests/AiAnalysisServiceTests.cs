@@ -91,6 +91,38 @@ public class AiAnalysisServiceTests
             () => service.AnalyzeAsync("ollama", "ERROR database", CancellationToken.None));
     }
 
+    [Fact]
+    public async Task AnalyzeAsync_RedactsPrivateKeysBeforeSendingAndCredentialsInTheReturnedBrief()
+    {
+        var brief = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            summary = "Calls failed with Authorization: Basic dXNlcjpzM2NyM3RQYXNz",
+            likelyCause = "Rotated key AccountKey=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA==;",
+            impact = $"Payments using {RedactionTests.StripeLiveKey} failed",
+            evidence = new[] { "Cookie: session=sess0123456789abcdef" },
+            nextSteps = new[] { "Rotate https://x.test/f?sig=AbCdEf1234567890xyzSIG" },
+            caveat = "None"
+        });
+        var handler = new StubHttpMessageHandler(_ => JsonResponse(
+            System.Text.Json.JsonSerializer.Serialize(new { message = new { content = brief } })));
+        var service = CreateService(handler, new Dictionary<string, string?>
+        {
+            ["Ai:Ollama:BaseUrl"] = "http://localhost:11434",
+            ["Ai:Ollama:Model"] = "test-model"
+        });
+
+        var result = await service.AnalyzeAsync(
+            "ollama",
+            "ERROR tls failed\n-----BEGIN PRIVATE KEY-----\nMIIEvAIBADAKEYBODYONE\nKEYBODYTWOxyz==\n-----END PRIVATE KEY-----\nERROR retry failed",
+            CancellationToken.None);
+
+        Assert.DoesNotContain("KEYBODY", handler.RequestContent, StringComparison.Ordinal);
+        var returned = string.Join(" ", new[] { result.Summary, result.LikelyCause, result.Impact, result.Caveat }
+            .Concat(result.Evidence).Concat(result.NextSteps));
+        foreach (var secret in new[] { "dXNlcjpzM2NyM3RQYXNz", "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA==", RedactionTests.StripeLiveKey, "sess0123456789abcdef", "AbCdEf1234567890xyzSIG" })
+            Assert.DoesNotContain(secret, returned, StringComparison.Ordinal);
+    }
+
     private static AiAnalysisService CreateService(
         StubHttpMessageHandler handler,
         Dictionary<string, string?> settings)

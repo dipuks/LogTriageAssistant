@@ -266,13 +266,22 @@ public class LogAnalyzerService
 
     private sealed record ParsedStructuredLine(string Message, string SearchText, string? Timestamp);
 
+    public static string RedactSensitiveData(string text) =>
+        RedactSensitiveDataForExternalUse(text);
+
+    public static string RedactSensitiveDataForExternalUse(string text)
+    {
+        var bearerSafe = BearerTokenPattern.Replace(text, "******");
+        return RedactSensitiveDataCore(bearerSafe);
+    }
+
     private static string TrimLine(string line)
     {
-        var cleaned = RedactSensitiveData(line.Trim());
+        var cleaned = RedactSensitiveDataCore(line.Trim());
         return cleaned.Length > 220 ? cleaned[..217] + "..." : cleaned;
     }
 
-    private static string RedactSensitiveData(string text)
+    private static string RedactSensitiveDataCore(string text)
     {
         var redacted = SensitiveAssignmentPattern.Replace(text, "$1[REDACTED]");
         redacted = BearerTokenPattern.Replace(redacted, "Bearer [REDACTED]");

@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.FileProviders;
 using System.Security.Claims;
 using System.Net;
 using System.Text;
@@ -63,12 +64,15 @@ builder.Services
     .AddOptions<AdminAuthOptions>()
     .Bind(builder.Configuration.GetSection("AdminAuth"))
     .Validate(
-        options => !string.IsNullOrWhiteSpace(options.Username) && options.Username.Length <= 100,
-        "AdminAuth:Username must contain 1-100 characters.")
-    .Validate(options => AdminCredentialVerifier.IsValidPasswordHash(options.PasswordHash),
-        "AdminAuth:PasswordHash must be an ASP.NET Core PasswordHasher hash.")
+        options =>
+            (string.IsNullOrWhiteSpace(options.Username) && string.IsNullOrWhiteSpace(options.PasswordHash)) ||
+            (!string.IsNullOrWhiteSpace(options.Username) &&
+             options.Username.Length <= 100 &&
+             AdminCredentialVerifier.IsValidPasswordHash(options.PasswordHash)),
+        "Configure both a valid AdminAuth:Username and PasswordHash, or leave both unset.")
     .ValidateOnStart();
 builder.Services.AddSingleton<AdminCredentialVerifier>();
+builder.Services.AddSingleton<PasswordHasher<object>>();
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
@@ -119,6 +123,16 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+    options.AddPolicy("account-register", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
 });
 builder.Services.Configure<FormOptions>(options =>
 {
@@ -140,6 +154,11 @@ var connectionString = new SqliteConnectionStringBuilder
 var maxSavedAnalyses = builder.Configuration.GetValue("Storage:MaxSavedAnalyses", 1000);
 builder.Services.AddSingleton(new LogAnalysisStore(connectionString, maxSavedAnalyses));
 builder.Services.AddSingleton<LogAnalyzerService>();
+builder.Services.AddHttpClient("ai-provider", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(45);
+});
+builder.Services.AddSingleton<AiAnalysisService>();
 
 var app = builder.Build();
 
@@ -180,6 +199,12 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(Path.Combine(app.Environment.WebRootPath!, "assets")),
+    RequestPath = "/assets"
+});
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -195,26 +220,90 @@ auth.MapGet("/csrf", (HttpContext context, IAntiforgery antiforgery) =>
 auth.MapPost("/login", async (
     AdminLoginRequest request,
     HttpContext context,
-    AdminCredentialVerifier credentialVerifier) =>
+    AdminCredentialVerifier credentialVerifier,
+    LogAnalysisStore store,
+    PasswordHasher<object> passwordHasher,
+    CancellationToken cancellationToken) =>
 {
-    if (!credentialVerifier.Verify(request.Username, request.Password))
+    var username = request.Username?.Trim();
+    var password = request.Password;
+    if (credentialVerifier.Verify(username, password))
+    {
+        await SignInAsync(context, "legacy-admin", username!);
+        return Results.NoContent();
+    }
+
+    var user = !string.IsNullOrWhiteSpace(username) && username.Length <= 32
+        ? await store.GetUserByUsernameAsync(username, cancellationToken)
+        : null;
+    var passwordIsValidLength = password is { Length: >= 12 and <= 1024 };
+    var validUser = user is not null &&
+        passwordIsValidLength &&
+        passwordHasher.VerifyHashedPassword(new object(), user.PasswordHash, password!) !=
+            PasswordVerificationResult.Failed;
+    if (!validUser)
     {
         return Results.Unauthorized();
     }
 
-    var claims = new[]
-    {
-        new Claim(ClaimTypes.Name, request.Username!.Trim())
-    };
-    var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-    await context.SignInAsync(
-        CookieAuthenticationDefaults.AuthenticationScheme,
-        new ClaimsPrincipal(identity),
-        new AuthenticationProperties { IsPersistent = false });
+    await SignInAsync(context, user!.Id, user.Username);
     return Results.NoContent();
 })
     .AllowAnonymous()
     .RequireRateLimiting("admin-login");
+
+auth.MapPost("/register", async (
+    AccountRegistrationRequest request,
+    HttpContext context,
+    LogAnalysisStore store,
+    PasswordHasher<object> passwordHasher,
+    Microsoft.Extensions.Options.IOptions<AdminAuthOptions> adminOptions,
+    CancellationToken cancellationToken) =>
+{
+    var username = request.Username?.Trim();
+    if (username is null ||
+        username.Length is < 3 or > 32 ||
+        !System.Text.RegularExpressions.Regex.IsMatch(
+            username,
+            @"\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+    {
+        return Results.BadRequest(new
+        {
+            error = "Username must be 3-32 characters, start with a letter or number, and use only letters, numbers, dots, underscores, or hyphens."
+        });
+    }
+
+    if (request.Password is not { Length: >= 12 and <= 1024 })
+    {
+        return Results.BadRequest(new { error = "Password must be between 12 and 1024 characters." });
+    }
+
+    if (!string.Equals(request.Password, request.ConfirmPassword, StringComparison.Ordinal))
+    {
+        return Results.BadRequest(new { error = "Passwords do not match." });
+    }
+
+    if (!string.IsNullOrWhiteSpace(adminOptions.Value.Username) &&
+        username.Equals(adminOptions.Value.Username, StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Conflict(new { error = "That username is unavailable." });
+    }
+
+    var account = new UserAccount(
+        Guid.NewGuid().ToString("N"),
+        username,
+        passwordHasher.HashPassword(new object(), request.Password));
+    if (!await store.CreateUserAsync(account, cancellationToken))
+    {
+        return Results.Conflict(new { error = "That username is unavailable." });
+    }
+
+    await SignInAsync(context, account.Id, account.Username);
+    return Results.NoContent();
+})
+    .AllowAnonymous()
+    .RequireRateLimiting("account-register");
 
 auth.MapPost("/logout", async (HttpContext context) =>
 {
@@ -225,10 +314,10 @@ auth.MapPost("/logout", async (HttpContext context) =>
 auth.MapGet("/status", (ClaimsPrincipal user) => Results.Ok(new { username = user.Identity?.Name }));
 
 app.MapGet("/login.html", (IWebHostEnvironment environment) =>
-    Results.File(Path.Combine(environment.WebRootPath!, "login.html"), "text/html; charset=utf-8"))
+    Results.File(Path.Combine(environment.WebRootPath!, "index.html"), "text/html; charset=utf-8"))
     .AllowAnonymous();
-app.MapGet("/login.js", (IWebHostEnvironment environment) =>
-    Results.File(Path.Combine(environment.WebRootPath!, "login.js"), "text/javascript; charset=utf-8"))
+app.MapGet("/register.html", (IWebHostEnvironment environment) =>
+    Results.File(Path.Combine(environment.WebRootPath!, "index.html"), "text/html; charset=utf-8"))
     .AllowAnonymous();
 
 app.UseAuthentication();
@@ -263,9 +352,10 @@ app.Use(async (context, next) =>
         path == "/health" ||
         path == "/health/ready" ||
         path == "/login.html" ||
-        path == "/login.js" ||
+        path == "/register.html" ||
         path == "/api/auth/csrf" ||
-        path == "/api/auth/login";
+        path == "/api/auth/login" ||
+        path == "/api/auth/register";
 
     if (!isPublicPath && context.User.Identity?.IsAuthenticated != true)
     {
@@ -316,6 +406,7 @@ app.MapGet("/api/history", async (
     int? pageSize,
     string? search,
     string? severity,
+    ClaimsPrincipal user,
     LogAnalysisStore store,
     CancellationToken cancellationToken) =>
 {
@@ -331,6 +422,7 @@ app.MapGet("/api/history", async (
     }
 
     var history = await store.GetHistoryAsync(
+        GetOwnerId(user),
         page ?? 1,
         pageSize ?? 20,
         search,
@@ -339,21 +431,93 @@ app.MapGet("/api/history", async (
     return Results.Ok(history);
 });
 
-app.MapGet("/api/recent", async (int? limit, LogAnalysisStore store, CancellationToken cancellationToken) =>
-    Results.Ok(await store.GetRecentAsync(limit ?? 10, cancellationToken)));
+app.MapGet("/api/ai/providers", (AiAnalysisService service) =>
+    Results.Ok(service.GetProviders()));
 
-app.MapGet("/api/recent/{id}", async (string id, LogAnalysisStore store, CancellationToken cancellationToken) =>
-    await store.GetByIdAsync(id, cancellationToken) is { } analysis
+app.MapPost("/api/ai/analyze", async (
+    AiAnalysisRequest request,
+    AiAnalysisService service,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.LogText))
+    {
+        return Results.BadRequest(new { error = "LogText must not be empty." });
+    }
+
+    if (System.Text.Encoding.UTF8.GetByteCount(request.LogText) > MaxLogContentBytes)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status413PayloadTooLarge,
+            title: "Log content is too large.",
+            detail: "Log content must be no larger than 2 MB.");
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Provider))
+    {
+        return Results.BadRequest(new { error = "Choose an AI provider." });
+    }
+
+    if (request.Provider is not ("ollama" or "hosted"))
+    {
+        return Results.BadRequest(new { error = "Choose a supported AI provider." });
+    }
+
+    try
+    {
+        var result = await service.AnalyzeAsync(request.Provider, request.LogText, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (AiProviderNotConfiguredException exception)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            title: "AI provider is not configured.",
+            detail: exception.Message);
+    }
+    catch (AiProviderTimeoutException exception)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status504GatewayTimeout,
+            title: "AI provider timed out.",
+            detail: exception.Message);
+    }
+    catch (AiProviderException exception)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status502BadGateway,
+            title: "AI analysis failed.",
+            detail: exception.Message);
+    }
+}).WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
+
+app.MapGet("/api/recent", async (
+    int? limit,
+    ClaimsPrincipal user,
+    LogAnalysisStore store,
+    CancellationToken cancellationToken) =>
+    Results.Ok(await store.GetRecentAsync(GetOwnerId(user), limit ?? 10, cancellationToken)));
+
+app.MapGet("/api/recent/{id}", async (
+    string id,
+    ClaimsPrincipal user,
+    LogAnalysisStore store,
+    CancellationToken cancellationToken) =>
+    await store.GetByIdAsync(id, GetOwnerId(user), cancellationToken) is { } analysis
         ? Results.Ok(analysis)
         : Results.NotFound(new { error = "Analysis not found." }));
 
-app.MapDelete("/api/recent/{id}", async (string id, LogAnalysisStore store, CancellationToken cancellationToken) =>
-    await store.DeleteAsync(id, cancellationToken)
+app.MapDelete("/api/recent/{id}", async (
+    string id,
+    ClaimsPrincipal user,
+    LogAnalysisStore store,
+    CancellationToken cancellationToken) =>
+    await store.DeleteAsync(id, GetOwnerId(user), cancellationToken)
         ? Results.NoContent()
         : Results.NotFound(new { error = "Analysis not found." }));
 
 app.MapPost("/api/analyze", async (
     LogAnalysisRequest request,
+    ClaimsPrincipal user,
     LogAnalyzerService service,
     LogAnalysisStore store,
     CancellationToken cancellationToken) =>
@@ -372,12 +536,13 @@ app.MapPost("/api/analyze", async (
     }
 
     var result = service.Analyze(request.LogText, request.FileName ?? "manual-entry.log");
-    await store.AddAsync(result, cancellationToken);
+    await store.AddAsync(result, GetOwnerId(user), cancellationToken);
     return Results.Ok(result);
 }).WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
 
 app.MapPost("/api/analyze-file", async (
     HttpRequest request,
+    ClaimsPrincipal user,
     LogAnalyzerService service,
     LogAnalysisStore store,
     CancellationToken cancellationToken) =>
@@ -423,13 +588,13 @@ app.MapPost("/api/analyze-file", async (
     using var streamReader = new StreamReader(stream);
     var content = await streamReader.ReadToEndAsync(cancellationToken);
     var result = service.Analyze(content, file.FileName);
-    await store.AddAsync(result, cancellationToken);
+    await store.AddAsync(result, GetOwnerId(user), cancellationToken);
     return Results.Ok(result);
 }).WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html").AllowAnonymous();
 
 app.Run();
 
@@ -456,5 +621,22 @@ static string ReadPassword()
     }
 
 }
+
+static Task SignInAsync(HttpContext context, string ownerId, string username)
+{
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.NameIdentifier, ownerId),
+        new Claim(ClaimTypes.Name, username)
+    };
+    var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+    return context.SignInAsync(
+        CookieAuthenticationDefaults.AuthenticationScheme,
+        new ClaimsPrincipal(identity),
+        new AuthenticationProperties { IsPersistent = false });
+}
+
+static string GetOwnerId(ClaimsPrincipal user) =>
+    user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "legacy-admin";
 
 public partial class Program { }

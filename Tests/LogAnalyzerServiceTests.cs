@@ -101,7 +101,6 @@ public class LogAnalyzerServiceTests
         const string token = "Bearer abc.def.ghi";
         const string email = "person@example.com";
         var result = _service.Analyze($"ERROR database failed {secret} {token} contact {email}");
-
         var finding = Assert.Single(result.Findings);
         Assert.Contains("[REDACTED]", finding.Message);
         Assert.Contains("Bearer [REDACTED]", finding.Message);

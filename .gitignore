@@ -16,3 +16,4 @@ node_modules/
 playwright-report/
 test-results/
 App_Data/keys/
+wwwroot/

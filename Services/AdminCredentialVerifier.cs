@@ -17,7 +17,8 @@ public sealed class AdminCredentialVerifier
 
     public bool Verify(string? username, string? password)
     {
-        var usernameMatches = username is { Length: <= 100 } &&
+        var usernameMatches = !string.IsNullOrWhiteSpace(_options.Username) &&
+            username is { Length: <= 100 } &&
             string.Equals(username, _options.Username, StringComparison.OrdinalIgnoreCase);
         var candidateHash = usernameMatches ? _options.PasswordHash : DummyPasswordHash;
         var passwordIsValidLength = password is { Length: > 0 and <= 1024 };

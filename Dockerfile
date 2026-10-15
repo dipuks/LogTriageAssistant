@@ -1,8 +1,17 @@
+FROM node:22-alpine AS frontend
+WORKDIR /src
+COPY ["package.json", "package-lock.json", "./"]
+RUN npm ci
+COPY ["client", "./client"]
+COPY ["vite.config.mts", "tsconfig.json", "./"]
+RUN npm run build
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY ["LogTriageAssistant.csproj", "./"]
 RUN dotnet restore "LogTriageAssistant.csproj"
 COPY . .
+COPY --from=frontend /src/wwwroot/ ./wwwroot/
 RUN dotnet publish "LogTriageAssistant.csproj" -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final

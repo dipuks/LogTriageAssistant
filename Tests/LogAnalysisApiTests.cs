@@ -48,7 +48,7 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
 
         Assert.Equal(HttpStatusCode.Unauthorized, apiResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, appResponse.StatusCode);
-        Assert.Equal("/login.html", appResponse.Headers.Location?.AbsolutePath);
+        Assert.Equal("/login.html", appResponse.Headers.Location?.OriginalString);
         Assert.True(
             loginResponse.StatusCode == HttpStatusCode.OK,
             $"Login page returned {(int)loginResponse.StatusCode} with redirect {loginResponse.Headers.Location}.");
@@ -91,6 +91,111 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Registration_CreatesAccountAndSignsUserIn()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateUnauthenticatedClient();
+        await factory.AddCsrfTokenAsync(client);
+
+        var response = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            username = "new.user",
+            password = "strong-registration-password",
+            confirmPassword = "strong-registration-password"
+        });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var authCookie = response.Headers.GetValues("Set-Cookie")
+            .Single(value => value.StartsWith("__Host-LogTriage.Auth=", StringComparison.Ordinal))
+            .Split(';', 2)[0];
+        client.DefaultRequestHeaders.Add("Cookie", authCookie);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/auth/status")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Registration_ValidatesCredentialsAndRejectsDuplicateUsernames()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var client = factory.CreateUnauthenticatedClient();
+        await factory.AddCsrfTokenAsync(client);
+
+        var weakPassword = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            username = "new-user",
+            password = "short",
+            confirmPassword = "short"
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, weakPassword.StatusCode);
+
+        var mismatch = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            username = "new-user",
+            password = "strong-registration-password",
+            confirmPassword = "different-registration-password"
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, mismatch.StatusCode);
+
+        var created = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            username = "new-user",
+            password = "strong-registration-password",
+            confirmPassword = "strong-registration-password"
+        });
+        Assert.Equal(HttpStatusCode.NoContent, created.StatusCode);
+
+        using var secondClient = factory.CreateUnauthenticatedClient();
+        await factory.AddCsrfTokenAsync(secondClient);
+        var duplicate = await secondClient.PostAsJsonAsync("/api/auth/register", new
+        {
+            username = "NEW-USER",
+            password = "strong-registration-password",
+            confirmPassword = "strong-registration-password"
+        });
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+    }
+
+    [Fact]
+    public async Task Analyses_ArePrivateBetweenRegisteredAccountsAndLegacyAdmin()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        using var adminClient = factory.CreateAuthenticatedClient();
+        using var userClient = await factory.CreateRegisteredClientAsync("private-user");
+
+        var adminAnalysis = await CreateAnalysisAsync(adminClient, "ERROR database", "admin-only-marker.log");
+        var userAnalysis = await CreateAnalysisAsync(userClient, "ERROR database", "user-only-marker.log");
+
+        var adminHistory = await adminClient.GetStringAsync("/api/history");
+        var userHistory = await userClient.GetStringAsync("/api/history");
+        Assert.Contains("admin-only-marker", adminHistory, StringComparison.Ordinal);
+        Assert.DoesNotContain("user-only-marker", adminHistory, StringComparison.Ordinal);
+        Assert.Contains("user-only-marker", userHistory, StringComparison.Ordinal);
+        Assert.DoesNotContain("admin-only-marker", userHistory, StringComparison.Ordinal);
+
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await userClient.GetAsync($"/api/recent/{adminAnalysis.Id}")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await userClient.DeleteAsync($"/api/recent/{adminAnalysis.Id}")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await adminClient.GetAsync($"/api/recent/{userAnalysis.Id}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ExistingAnalysisDatabase_MigratesOldRecordsToLegacyAdmin()
+    {
+        using var factory = new LogAnalysisApiFactory();
+        await factory.CreateLegacyAnalysisSchemaAsync();
+        using var adminClient = factory.CreateAuthenticatedClient();
+
+        var recent = await adminClient.GetFromJsonAsync<List<AnalysisResponse>>("/api/recent?limit=10");
+
+        Assert.NotNull(recent);
+        Assert.Contains(recent, analysis => analysis.Id == "existing-legacy-analysis");
     }
 
     [Fact]
@@ -162,6 +267,18 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
     public async Task Analyze_RejectsEmptyLogText()
     {
         var response = await _client.PostAsJsonAsync("/api/analyze", new { logText = " " });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AiAnalysis_RejectsUnsupportedProvider()
+    {
+        var response = await _client.PostAsJsonAsync("/api/ai/analyze", new
+        {
+            logText = "ERROR database unavailable",
+            provider = "unsupported"
+        });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -390,9 +507,12 @@ public class LogAnalysisApiTests : IClassFixture<LogAnalysisApiFactory>
         public AnalysisStatistics Statistics { get; set; } = new();
     }
 
-    private static async Task<AnalysisResponse> CreateAnalysisAsync(HttpClient client, string logText)
+    private static async Task<AnalysisResponse> CreateAnalysisAsync(
+        HttpClient client,
+        string logText,
+        string? fileName = null)
     {
-        var response = await client.PostAsJsonAsync("/api/analyze", new { logText });
+        var response = await client.PostAsJsonAsync("/api/analyze", new { logText, fileName });
         Assert.True(
             response.StatusCode == HttpStatusCode.OK,
             $"Analyze returned {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
@@ -485,6 +605,64 @@ public sealed class LogAnalysisApiFactory : WebApplicationFactory<Program>
         client.DefaultRequestHeaders.Add("Cookie", GetCookie(csrfResponse, "LogTriage.Csrf"));
         client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", csrfToken!.Token);
         return csrfToken.Token;
+    }
+
+    public async Task<HttpClient> CreateRegisteredClientAsync(string username)
+    {
+        var client = CreateUnauthenticatedClient();
+        await AddCsrfTokenAsync(client);
+        const string password = "registered-test-password-123!";
+        var response = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            username,
+            password,
+            confirmPassword = password
+        });
+        response.EnsureSuccessStatusCode();
+        var existingCookies = string.Join("; ", client.DefaultRequestHeaders.GetValues("Cookie"));
+        var authCookie = GetCookie(response, "__Host-LogTriage.Auth");
+        client.DefaultRequestHeaders.Remove("Cookie");
+        client.DefaultRequestHeaders.Add("Cookie", $"{existingCookies}; {authCookie}");
+        var csrfResponse = await client.GetAsync("/api/auth/csrf");
+        csrfResponse.EnsureSuccessStatusCode();
+        var csrf = await csrfResponse.Content.ReadFromJsonAsync<CsrfResponse>();
+        var refreshedCsrfCookie = TryGetCookie(csrfResponse, "LogTriage.Csrf")
+            ?? existingCookies.Split(';', StringSplitOptions.TrimEntries)
+                .First(cookie => cookie.StartsWith("LogTriage.Csrf=", StringComparison.Ordinal));
+        client.DefaultRequestHeaders.Remove("Cookie");
+        client.DefaultRequestHeaders.Add("Cookie", $"{refreshedCsrfCookie}; {authCookie}");
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", csrf!.Token);
+        return client;
+    }
+
+    public async Task CreateLegacyAnalysisSchemaAsync()
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _databasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate
+        }.ToString());
+        await connection.OpenAsync();
+        var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE Analyses (
+                Id TEXT PRIMARY KEY,
+                AnalyzedAt TEXT NOT NULL,
+                Severity TEXT NOT NULL,
+                FileName TEXT NOT NULL,
+                ResultJson TEXT NOT NULL
+            );
+            INSERT INTO Analyses (Id, AnalyzedAt, Severity, FileName, ResultJson)
+            VALUES (
+                'existing-legacy-analysis',
+                '2026-01-01T00:00:00.0000000+00:00',
+                'HIGH',
+                'legacy.log',
+                '{"id":"existing-legacy-analysis","fileName":"legacy.log","summary":"Existing legacy analysis","severity":"HIGH"}'
+            );
+            """;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static string GetCookie(HttpResponseMessage response, string name)

@@ -6,6 +6,26 @@ public class LogAnalysisRequest
     public string? FileName { get; set; }
 }
 
+public sealed class AiAnalysisRequest
+{
+    public string? LogText { get; set; }
+    public string? Provider { get; set; }
+}
+
+public sealed class AiAnalysisResult
+{
+    public string Provider { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
+    public string LikelyCause { get; set; } = string.Empty;
+    public string Impact { get; set; } = string.Empty;
+    public List<string> Evidence { get; set; } = [];
+    public List<string> NextSteps { get; set; } = [];
+    public string Caveat { get; set; } = string.Empty;
+}
+
+public sealed record AiProviderStatus(string Id, string Name, bool Configured, string Privacy);
+
 public class LogAnalysisResult
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");

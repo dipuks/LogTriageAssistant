@@ -14,9 +14,9 @@
   <ItemGroup>
     <Compile Remove="Tests/**/*.cs" />
     <Content Remove="Tests/**" />
-    <Content Remove="node_modules/**;playwright-report/**;test-results/**;test-support/**;e2e/**;playwright.config.js;package*.json" />
+    <Content Remove="client/**;node_modules/**;playwright-report/**;test-results/**;test-support/**;e2e/**;playwright.config.js;vite.config.mts;tsconfig.json;package*.json" />
     <None Remove="Tests/**" />
-    <None Remove="node_modules/**;playwright-report/**;test-results/**;test-support/**;e2e/**;playwright.config.js;package*.json" />
+    <None Remove="client/**;node_modules/**;playwright-report/**;test-results/**;test-support/**;e2e/**;playwright.config.js;vite.config.mts;tsconfig.json;package*.json" />
   </ItemGroup>
 
 </Project>

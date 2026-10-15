@@ -12,7 +12,7 @@ module.exports = defineConfig({
     browserName: 'chromium'
   },
   webServer: {
-    command: 'dotnet run --no-build --configuration Release --urls http://127.0.0.1:5173',
+    command: 'dotnet run --configuration Release --urls http://127.0.0.1:5173',
     url: 'http://127.0.0.1:5173/health/ready',
     reuseExistingServer: !process.env.CI,
     timeout: 60000,

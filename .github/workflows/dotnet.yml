@@ -15,16 +15,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: npm ci
+      - run: npm run build
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-restore
-      - run: npm ci
       - name: Create test-only authentication credentials
         run: echo "ADMIN_AUTH_PASSWORD_HASH=$(node test-support/create-e2e-password-hash.js)" >> "$GITHUB_ENV"
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - run: node --check wwwroot/app.js
-      - run: node --check wwwroot/login.js
+      - run: node --check wwwroot/assets/*.js
       - run: node --check e2e/app.spec.js
       - run: node --check playwright.config.js
       - run: node --check test-support/create-e2e-password-hash.js

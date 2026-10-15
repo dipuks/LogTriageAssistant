@@ -12,5 +12,3 @@ test-results
 test-support
 e2e
 playwright.config.js
-package.json
-package-lock.json

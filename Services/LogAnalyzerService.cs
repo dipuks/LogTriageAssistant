@@ -59,7 +59,7 @@ public class LogAnalyzerService
     private static readonly Dictionary<string, string[]> CategoryPatterns = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Authentication"] = ["unauthorized", "forbidden", "access denied", "401", "403", "login failed", "token expired"],
-        ["Database"] = ["sql", "database", "dbconn", "connection timeout", "deadlock", "timeout while waiting", "ora-", "mysql", "postgres"],
+        ["Database"] = ["sql", "sqlite", "npgsql", "database", "dbconn", "connection timeout", "deadlock", "timeout while waiting", "ora-", "mysql", "postgres"],
         ["Network"] = ["socket", "dns", "connection refused", "network", "handshake", "tls", "http 502", "http 503", "timeout"],
         ["Dependency"] = ["service unavailable", "upstream", "api call failed", "external dependency", "503", "502", "remote service"],
         ["Configuration"] = ["missing config", "appsettings", "environment variable", "configuration", "null reference", "setting"],
@@ -70,6 +70,39 @@ public class LogAnalyzerService
         ["Runtime / Crash"] = ["exception", "fatal", "panic", "crash", "segmentation fault", "stacktrace", "thread abort"],
         ["Build / Deploy"] = ["build failed", "publish failed", "assembly not found", "dll not found", "deployment", "artifact"],
     };
+
+    /// <summary>
+    /// Each keyword is matched as a token, not as an arbitrary substring, so identifiers, numbers and timestamps do not
+    /// produce categories ("4031 ms" or a GUID containing "403" is not Authentication, "room" is not Memory):
+    /// <list type="bullet">
+    /// <item>HTTP status codes (401, 403, 502, 503) count only in a status context: "HTTP 503", "status=401",
+    /// "returned (403)", "statusCode":502, or followed by their reason phrase ("401 Unauthorized").</item>
+    /// <item>Words and phrases must start at a word boundary (a camelCase or acronym boundary also counts, so
+    /// "SqlException" and "NullReferenceException" still match). Short keywords (four characters or fewer) must also end
+    /// at a word boundary; longer keywords may be followed by a suffix ("settings", "timeouts").</item>
+    /// </list>
+    /// A cheap case-insensitive <c>Contains</c> runs first; the boundary regex only runs on candidate lines.
+    /// </summary>
+    private static readonly (string Category, (string Probe, Regex Rule)[] Keywords)[] CategoryRules = CategoryPatterns
+        .Select(pair => (pair.Key, pair.Value.Select(keyword => (keyword.Split(' ')[0], BuildKeywordRule(keyword))).ToArray()))
+        .ToArray();
+
+    private static Regex BuildKeywordRule(string keyword)
+    {
+        if (keyword.All(char.IsAsciiDigit))
+        {
+            return new Regex(
+                $$"""(?i)\b(?:http(?:/[0-9.]+)?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|returned|code|error)\W{0,4}{{keyword}}(?![\w.])|(?<![\w.:/-]){{keyword}}\s+(?:unauthori[sz]ed|forbidden|bad\s+gateway|service\s+unavailable|gateway\s+time-?out)""",
+                RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        }
+
+        var body = string.Join(@"[\s_-]+", keyword.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(Regex.Escape));
+        var start = @"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z]))";
+        var end = char.IsAsciiDigit(keyword[^1]) ? @"(?![0-9])"
+            : keyword.Length <= 4 ? @"(?![a-z])"
+            : string.Empty;
+        return new Regex($"{start}(?i:{body}){end}", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    }
 
     private static readonly Dictionary<string, string> RecommendationMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -173,20 +206,30 @@ public class LogAnalyzerService
         };
     }
 
+    /// <summary>The category with the most matching keywords; ties go to the category listed first.</summary>
     private static string? DetectCategory(string line)
     {
-        return CategoryPatterns
-            .Select((pair, order) => new
+        string? best = null;
+        var bestCount = 0;
+        foreach (var (category, keywords) in CategoryRules)
+        {
+            var count = 0;
+            foreach (var (probe, rule) in keywords)
             {
-                Category = pair.Key,
-                Order = order,
-                MatchCount = pair.Value.Count(pattern => line.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-            })
-            .Where(match => match.MatchCount > 0)
-            .OrderByDescending(match => match.MatchCount)
-            .ThenBy(match => match.Order)
-            .Select(match => match.Category)
-            .FirstOrDefault();
+                if (line.Contains(probe, StringComparison.OrdinalIgnoreCase) && rule.IsMatch(line))
+                {
+                    count++;
+                }
+            }
+
+            if (count > bestCount)
+            {
+                best = category;
+                bestCount = count;
+            }
+        }
+
+        return best;
     }
 
     private static List<ParsedLogEvent> ParseLogEvents(string[] lines)

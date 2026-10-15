@@ -169,20 +169,22 @@ public class LogAnalysisStore
         command.Parameters.AddWithValue("$resultJson", JsonSerializer.Serialize(item, JsonOptions));
         await command.ExecuteNonQueryAsync(cancellationToken);
 
+        // Retention is per owner, and only this owner's history can have grown: trim just their oldest rows through
+        // IX_Analyses_Owner_AnalyzedAt instead of ranking every owner's rows on each insert.
         var retentionCommand = connection.CreateCommand();
         retentionCommand.Transaction = (SqliteTransaction)transaction;
         retentionCommand.CommandText = """
             DELETE FROM Analyses
-            WHERE Id IN (
-                SELECT Id FROM (
-                    SELECT Id, ROW_NUMBER() OVER (
-                        PARTITION BY OwnerId ORDER BY AnalyzedAt DESC, rowid DESC
-                    ) AS RowNumber
-                    FROM Analyses
-                )
-                WHERE RowNumber > $maxRows
+            WHERE OwnerId = $ownerId
+              AND Id IN (
+                SELECT Id
+                FROM Analyses
+                WHERE OwnerId = $ownerId
+                ORDER BY AnalyzedAt DESC, rowid DESC
+                LIMIT -1 OFFSET $maxRows
             );
             """;
+        retentionCommand.Parameters.AddWithValue("$ownerId", ownerId);
         retentionCommand.Parameters.AddWithValue("$maxRows", _maxSavedAnalyses);
         await retentionCommand.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
